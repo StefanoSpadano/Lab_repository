@@ -1,0 +1,41 @@
+# -------------------------------------------
+# IGNORA FILE DI DATI ENORMI E NON NECESSARI
+# -------------------------------------------
+
+# File raw della FERS5200
+*.dat
+*.bin
+*.txt
+
+# File ROOT (generati automaticamente)
+*.root
+
+# Cartelle di dati che non vanno versionate
+Data
+Results
+
+# -------------------------------------------
+# IGNORA FILE PYTHON NON UTILI
+# -------------------------------------------
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ambiente virtuale Python
+venv/
+.venv/
+env/
+
+# File temporanei
+*.tmp
+*.temp
+*.log
+
+# -------------------------------------------
+# IGNORA FILE DI SISTEMA
+# -------------------------------------------
+
+# Windows
+Thumbs.db
