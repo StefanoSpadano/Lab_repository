@@ -10,8 +10,26 @@
 # File ROOT (generati automaticamente)
 *.root
 
-# Cartelle di dati che non vanno versionate
-Data
+# --- Data folder ---
+
+# Ignora tutto in Data/
+Data/*
+
+# Ma NON ignorare la cartella principale Data/
+!Data/
+
+# Non ignorare la cartella Data_converted/
+!Data/Data_converted/
+
+# Dentro Data_converted ignora tutto
+Data/Data_converted/*
+
+# Ma non ignorare il file .gitkeep
+!Data/Data_converted/.gitkeep
+
+# Mantieni anche il .gitkeep nella cartella Data/ principale
+!Data/.gitkeep
+
 Results
 
 # -------------------------------------------
