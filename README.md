@@ -18,10 +18,10 @@ Lab_repository/
 ├── Scripts/ # Python script to convert files from .txt to .root and Python file to run the pipeline
 │ └──analysis # Python scripts for analysis
 ├── Data/ # save here you data that need to be converted in .root
-│ └── Data_converted/ # Placeholder folder for converted data 
+│ └── Data_converted/ # placeholder folder for converted data 
 │ └── .gitkeep
 │
-├── Results/ # Placeholder for analysis outputs (ignored except .gitkeep)
+├── Results/ # placeholder for analysis outputs (ignored except .gitkeep)
 │ └── .gitkeep
 │
 ├── requirements.txt # Python dependencies used by all scripts
@@ -69,3 +69,38 @@ So we opted to convert them to .root allowing us to store data in a compressed, 
 - efficient handling of large datasets over long acquisition periods.
 
 As a result, .root seemed to be the natural choice for analysis workflows in radiation detection and gamma-camera experiments.
+
+Once you are in the Scripts folder and you saved your .txt files in the Data folder you can start the conversion by running:
+```bash
+python convert_to_root.py
+```
+During our acquisitions in the laboratory, we thought it was best for us to save the files we gather using the FERS, according to their date of acquisition; so a Run acquired today (01/12/2025) should be saved in a folder called 2025-12-01 and this folder should be placed inside the Data folder. 
+
+The script in this way is going to select the latest folder and create a folder, inside the folder Data_converted, with a corresponding name (date) containing the same Runs but converted in .root. 
+
+### 2. Run the analysis pipeline
+Once the conversion to .root is complete, the analysis can be performed running the main pipeline script from the Scripts folder:
+```bash
+python run_pipeline.py
+```
+
+This pipeline automatically:
+- identifies the latest folder inside Data/Data_converted;
+- load each run.root files;
+- performs event processing and histogram extraction;
+- generate both a global pixel map and a cluster pixel map;
+- fits 1D and 2D distributions;
+- saves all results (plots, JSON summaries, and derived quantities) inside a new date-stamped folder under Results/ .
+
+So, once this has worked correctly an example output could be something like this:
+```
+Results/
+└── 2025-12-01/
+    ├── Run0/
+    │   ├── histograms/
+    │   ├── fits/
+    │   ├── spectrum/
+    │   └── plots/
+    ├── Run1/
+    └── ...
+```
