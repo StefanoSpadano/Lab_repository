@@ -11,6 +11,8 @@ This project contains:
 
 ## Repository Structure
 
+
+```
 Lab_repository/
 │
 ├── Scripts/ # Python script to convert files from .txt to .root
@@ -24,4 +26,7 @@ Lab_repository/
 │
 ├── requirements.txt # Python dependencies used by all scripts
 └── README.md
+```
+
+
 
