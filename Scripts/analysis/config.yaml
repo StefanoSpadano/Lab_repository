@@ -1,0 +1,6 @@
+threshold: 75
+pedestal: 50
+pixel_size: 3.2
+
+histogram_bins:
+  total_charge: [301, -5, 7005]

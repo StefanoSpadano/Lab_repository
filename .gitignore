@@ -30,7 +30,9 @@ Data/Data_converted/*
 # Mantieni anche il .gitkeep nella cartella Data/ principale
 !Data/.gitkeep
 
-Results
+Results/*
+!Results/.gitkeep
+
 
 # -------------------------------------------
 # IGNORA FILE PYTHON NON UTILI
