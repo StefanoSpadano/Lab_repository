@@ -15,7 +15,7 @@ This project contains:
 ```
 Lab_repository/
 │
-├── Scripts/ # Python script to convert files from .txt to .root
+├── Scripts/ # Python script to convert files from .txt to .root and Python file to run the pipeline
 │ └──analysis # Python scripts for analysis
 ├── Data/
 │ └── Data_converted/ # Placeholder folder for converted data (kept empty in repo)
