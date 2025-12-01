@@ -40,6 +40,7 @@ cd Lab_repository
 ```
 
 ### 2. Create a virtual environment
+Create a venv where you just cloned the repository
 
 ```bash
 python3 -m venv venv
@@ -48,10 +49,23 @@ venv\Scripts\activate        # Windows
 ```
 
 ### 3. Install dependencies
+All dependencies are listed in requirements.txt file and can be installed via: 
 
 ```bash
 pip install -r requirements.txt
 ```
 
+---
 
+## Usage
 
+### 1. Convert files from .txt to .root format
+FERS-5200 raw data are initially stored in plain .txt format, which is human-readable but inefficient for large datasets, multi-channel acquisition and structured event data.
+So we opted to convert them to .root allowing us to store data in a compressed, binary, columnar format optimized for this applications. This ensures:
+
+- much faster I/O and event access;
+- structured storage of channels, timestamps and event metadata;
+- compatibility with analysis tools such as ROOT, uproot, awkward arrays;
+- efficient handling of large datasets over long acquisition periods.
+
+As a result, .root seemed to be the natural choice for analysis workflows in radiation detection and gamma-camera experiments.
