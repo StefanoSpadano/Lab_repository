@@ -1,198 +1,112 @@
 import os
 import json
-from typing import Dict
 import numpy as np
-from .fitting import FitResult
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import seaborn as sns
+from analysis.io_manager import get_run_output_dir
 
+# Stile Matplotlib pulito
+plt.style.use('seaborn-v0_8-paper')
 
-# ----------------------------------------
-# Create directory if missing
-# ----------------------------------------
-def ensure_dir(path: str):
-    if not os.path.exists(path):
-        os.makedirs(path)
+def convert_numpy(obj):
+    if isinstance(obj, np.integer): return int(obj)
+    elif isinstance(obj, np.floating): return float(obj)
+    elif isinstance(obj, np.ndarray): return obj.tolist()
+    return obj
 
-
-# ----------------------------------------
-# Convert FitResult → JSON serializable dict
-# ----------------------------------------
-def serialize_fit_result(fit: FitResult) -> Dict:
-    if fit is None:
-        return {}
-
-    return {
-        "params": fit.params.tolist(),   # numpy → list
-        "errors": fit.errors.tolist() if fit.errors is not None else None,
-        "covariance": fit.cov.tolist() if fit.cov is not None else None
+def save_all_results(results, date_str, run_name):
+    """
+    Salva i risultati replicando i plot Legacy (npix, xyglob 2D, ecc.)
+    """
+    base_dir = get_run_output_dir(date_str, run_name)
+    dirs = {
+        "hist": os.path.join(base_dir, "histograms"),
+        "maps": os.path.join(base_dir, "maps"),
+        "plots": os.path.join(base_dir, "plots")
     }
+    for d in dirs.values(): os.makedirs(d, exist_ok=True)
 
+    print(f"💾 Salvataggio Plot stile Legacy...")
 
-# ----------------------------------------
-# Save FitResult to JSON
-# ----------------------------------------
-def save_fit_result(fit: FitResult, out_path: str):
-    ensure_dir(os.path.dirname(out_path))
+    # --- 1. ISTOGRAMMI 1D (npix, charge, xglob 1D) ---
+    if "histograms" in results:
+        for name, (bins, counts) in results["histograms"].items():
+            # JSON Dati
+            with open(os.path.join(dirs["hist"], f"{name}.json"), "w") as f:
+                json.dump({"bins": convert_numpy(bins), "counts": convert_numpy(counts)}, f)
+            
+            # PNG Plot
+            plt.figure(figsize=(8, 6))
+            centers = 0.5 * (bins[:-1] + bins[1:])
+            plt.step(centers, counts, where='mid', color='royalblue', linewidth=1.5, label=name)
+            plt.fill_between(centers, counts, step='mid', alpha=0.3, color='royalblue')
+            
+            # Zoom per spettri carica
+            if "charge" in name:
+                nonzero = np.where(counts > 0)[0]
+                if len(nonzero) > 0: plt.xlim(0, bins[nonzero[-1]] * 1.1)
+            # Limiti fissi per posizioni (Legacy style)
+            if name in ['xglob', 'yglob', 'xclus', 'yclus']:
+                plt.xlim(-12.8, 12.8)
+            
+            plt.title(f"{name}_sub")
+            plt.xlabel("Value")
+            plt.ylabel("Counts")
+            plt.grid(True, alpha=0.3)
+            plt.savefig(os.path.join(dirs["plots"], f"{name}_sub.png"))
+            plt.close()
 
-    out_dict = serialize_fit_result(fit)
+    # --- 2. MAPPE 2D & SCATTER DATA ---
+    if "scatter_data" in results:
+        sc = results["scatter_data"]
 
-    with open(out_path, "w") as f:
-        json.dump(out_dict, f, indent=4)
+        # =================================================================
+        # [FIX IMPORTANTE] SALVATAGGIO RAW DATA SU JSON
+        # Senza questo, calc_psf.py non ha i dati per lavorare!
+        # =================================================================
+        scatter_json_path = os.path.join(dirs["hist"], "scatter_data.json")
+        try:
+            # Convertiamo tutto il dizionario numpy in liste serializzabili
+            serializable_sc = {k: convert_numpy(v) for k, v in sc.items()}
+            with open(scatter_json_path, "w") as f:
+                json.dump(serializable_sc, f)
+            print(f"   -> Salvato scatter_data.json (per PSF)")
+        except Exception as e:
+            print(f"   ⚠️ Errore salvataggio scatter JSON: {e}")
+        # =================================================================
 
-    print(f"[OK] Salvato fit JSON → {out_path}")
+        # Definizioni Plot 2D Legacy
+        plot_defs = [
+            ("xyglob_sub.png", "xyglob_x", "xyglob_y", 12, [[-12.8, 12.8], [-12.8, 12.8]]),
+            ("xyclus_sub.png", "xyclus_x", "xyclus_y", 12, [[-12.8, 12.8], [-12.8, 12.8]]),
+            ("pixmapglob_sub.png", "pixmapglob_x", "pixmapglob_y", 8, [[-0.5, 7.5], [-0.5, 7.5]])
+        ]
 
+        for out_name, kx, ky, nbins, rng in plot_defs:
+            if kx in sc and ky in sc:
+                x = sc[kx]
+                y = sc[ky]
+                w = sc.get("pixmapglob_w") if "pixmap" in out_name else None
+                
+                # Filtro valori validi
+                if w is None:
+                    mask = (x > -100) & (y > -100) 
+                    x = x[mask]; y = y[mask]
+                
+                if len(x) > 0:
+                    plt.figure(figsize=(8, 6))
+                    H, xedges, yedges = np.histogram2d(x, y, bins=nbins, range=rng, weights=w)
+                    
+                    plt.imshow(H.T, origin='lower', extent=[rng[0][0], rng[0][1], rng[1][0], rng[1][1]], 
+                               cmap='plasma', aspect='auto')
+                    
+                    plt.colorbar(label='Counts')
+                    plt.title(out_name.replace(".png", ""))
+                    plt.xlabel("X")
+                    plt.ylabel("Y")
+                    plt.savefig(os.path.join(dirs["plots"], out_name))
+                    plt.close()
 
-# ----------------------------------------
-# Save histogram data
-# ----------------------------------------
-def save_histogram_data(bin_centers, hist_values, out_path: str):
-    ensure_dir(os.path.dirname(out_path))
-
-    out = {
-        "bin_centers": bin_centers.tolist(),
-        "hist_values": hist_values.tolist()
-    }
-
-    with open(out_path, "w") as f:
-        json.dump(out, f, indent=4)
-
-    print(f"[OK] Salvato istogramma → {out_path}")
-
-
-# ----------------------------------------
-# Save map/matrix
-# ----------------------------------------
-def save_map_data(matrix: np.ndarray, out_path: str):
-    ensure_dir(os.path.dirname(out_path))
-
-    out = {"matrix": matrix.tolist()}
-
-    with open(out_path, "w") as f:
-        json.dump(out, f, indent=4)
-
-    print(f"[OK] Salvata mappa → {out_path}")
-
-
-# ----------------------------------------
-# Save figure (PNG)
-# ----------------------------------------
-def save_figure(fig, out_path: str):
-    ensure_dir(os.path.dirname(out_path))
-    fig.savefig(out_path, dpi=150)
-    print(f"[OK] Salvato plot → {out_path}")
-
-# ----------------------------------------
-# Save total-charge spectrum (JSON + PNG)
-# ----------------------------------------
-def save_total_charge_spectrum(res, base_path: str):
-    """
-    Crea e salva lo spettro di total_charge usando binning automatico.
-    Salva:
-        - spectrum/total_charge_spectrum.json
-        - spectrum/total_charge_spectrum.png
-    """
-
-    import numpy as np
-    import matplotlib.pyplot as plt
-
-    # estrai vettore total_charge
-    total = np.array(res["raw"].total_charge, dtype=float)
-
-    # istogramma automatico numpy
-    hist_vals, bin_edges = np.histogram(total, bins="auto")
-
-    # directory output
-    spectrum_dir = os.path.join(base_path, "spectrum")
-    ensure_dir(spectrum_dir)
-
-    # 1) salva JSON
-    out_json = {
-        "bin_edges": bin_edges.tolist(),
-        "hist_values": hist_vals.tolist(),
-        "n_events": len(total),
-        "min_charge": float(np.min(total)),
-        "max_charge": float(np.max(total))
-    }
-
-    with open(os.path.join(spectrum_dir, "total_charge_spectrum.json"), "w") as f:
-        json.dump(out_json, f, indent=4)
-
-    print(f"[OK] Salvato JSON spettro carica totale → {spectrum_dir}/total_charge_spectrum.json")
-
-    # 2) salva figura PNG
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(total, bins=bin_edges)
-    ax.set_title("Total Charge Spectrum")
-    ax.set_xlabel("Total charge (ADC)")
-    ax.set_ylabel("Counts")
-    fig.tight_layout()
-    fig.savefig(os.path.join(spectrum_dir, "total_charge_spectrum.png"), dpi=150)
-    plt.close(fig)
-
-    print(f"[OK] Salvato PNG spettro carica totale → {spectrum_dir}/total_charge_spectrum.png")
-
-
-# ----------------------------------------
-# Main function: save ALL results
-# ----------------------------------------
-def save_all_results(res, figs: dict, date_str: str, run_number: int):
-    """
-    res: output di collect_all_histograms
-    figs: dict con nome → figure matplotlib
-    date_str: "2025-11-06"
-    run_number: es. 1
-    """
-
-    base = os.path.abspath(os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        "..",
-        "Results",
-        date_str,
-        f"Run{run_number}"
-    ))
-
-    ensure_dir(base)
-
-    # --------------------------
-    # 1) FIT RESULTS
-    # --------------------------
-    fits_path = os.path.join(base, "fits")
-    ensure_dir(fits_path)
-
-    for name, fit in res["fits"].items():
-        save_fit_result(fit, os.path.join(fits_path, f"{name}.json"))
-
-    # --------------------------
-    # 2) HISTOGRAMS
-    # --------------------------
-    hist_path = os.path.join(base, "histograms")
-    ensure_dir(hist_path)
-
-    for name, (bins, values) in res["histograms"].items():
-        save_histogram_data(bins, values, os.path.join(hist_path, f"{name}.json"))
-
-    # --------------------------
-    # 3) MAPS
-    # --------------------------
-    maps_path = os.path.join(base, "maps")
-    ensure_dir(maps_path)
-
-    save_map_data(res["maps"]["pixmapglob"], os.path.join(maps_path, "pixmapglob.json"))
-    save_map_data(res["maps"]["pixmapclus"], os.path.join(maps_path, "pixmapclus.json"))
-
-    # --------------------------
-    # 4) PLOTS (PNG)
-    # --------------------------
-    fig_path = os.path.join(base, "plots")
-    ensure_dir(fig_path)
-
-    for name, fig in figs.items():
-        save_figure(fig, os.path.join(fig_path, f"{name}.png"))
-    
-    # --------------------------
-    # 5) TOTAL CHARGE SPECTRUM
-    # --------------------------
-    save_total_charge_spectrum(res, base)
-
-    print("\n================================")
-    print("   ✔️ TUTTI I RISULTATI SALVATI ")
-    print("================================\n")
+    print(f"✅ Plot Legacy salvati in: {dirs['plots']}")

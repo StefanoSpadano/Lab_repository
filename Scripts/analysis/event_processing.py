@@ -1,308 +1,287 @@
-"""
-event_processing.py
-
-Modulo per la processazione degli eventi FERS a partire dai file ROOT.
-Responsabilità:
-- Leggere il TTree "fersTree" usando uproot
-- Processare ogni evento (pixel max, cluster 5x5 e 7x7, baricentri, mappe 8x8)
-- Aggregare i risultati in una struttura EventData
-- Utilizzare i parametri di configurazione dal file config.yaml
-
-Questo modulo sostituisce la funzione monolitica originale collect_all_histograms.
-
-Versione iniziale: struttura chiara, testabile, con controlli robusti.
-"""
-
 import numpy as np
 import uproot
-from analysis.config import cfg
-import logging
-from analysis.fitting import gaussian_fit, gaussian2d_fit
+import pandas as pd
+import os
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from typing import Dict, Any, Optional
+from analysis.io_manager import get_project_root
+
+# CONFIGURAZIONE COSTANTI
+PEDESTAL = 50
+THR = 75
+PIX_SIZE = 3.2
+THR_CENTROID = 50
+
+# Mappe Canali
+CH_ID_2_MAP_X = np.array([0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,
+                          0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7], dtype=int)
+CH_ID_2_MAP_Y = np.array([6,5,7,4,7,4,6,5,6,5,7,4,7,4,6,5,6,5,7,4,7,4,6,5,6,5,7,4,7,4,6,5,
+                          2,1,3,0,3,0,2,1,2,1,3,0,3,0,2,1,2,1,3,0,3,0,2,1,2,1,3,0,3,0,2,1], dtype=int)
+
+def load_calibration_dynamic(run_dir):
+    corr = np.ones(64, dtype=float)
+    calib_source = "None (Unity)"
+    expected_path = os.path.join(run_dir, "calibration.xlsx")
+    
+    if os.path.exists(expected_path):
+        try:
+            df_corr = pd.read_excel(expected_path, sheet_name='Correzioni', dtype=str)
+            count = 0
+            for _, row in df_corr.iterrows():
+                try:
+                    ch = int(float(row["Channel"]))
+                    val = float(str(row["Correction"]).replace(',', '.'))
+                    if 0 <= ch < 64: 
+                        corr[ch] = val
+                        count += 1
+                except: continue
+            calib_source = f"File: {os.path.basename(expected_path)} ({count} ch)"
+        except Exception as e:
+            print(f"    ⚠️ Errore lettura calibrazione: {e}")
+            calib_source = "Error (Unity)"
+    
+    return corr, calib_source
+
+def elapsed_time(trigTime):
+    if len(trigTime) == 0: return 1.0
+    return (np.max(trigTime) - np.min(trigTime)) / (10**6)
+
+# --- NUOVE FUNZIONI PER SOTTRAZIONE E PLOT ---
+
+def plot_subtraction_check(bins, raw_c, bkg_scaled_c, net_c, name, run_path, scale_factor):
+    """Genera il plot di confronto pre/post sottrazione nella cartella Results."""
+    
+    # 1. Capiamo in che run e in che data ci troviamo partendo dal file .root
+    # Esempio run_path: .../Data_Converted/27_11_2025/Run1.root
+    run_file = os.path.basename(run_path)                  # "Run1.root"
+    run_name = os.path.splitext(run_file)[0]               # "Run1"
+    date_str = os.path.basename(os.path.dirname(run_path)) # "27_11_2025"
+    
+    # 2. Costruiamo il percorso corretto verso Results
+    root_dir = get_project_root()
+    out_dir = os.path.join(root_dir, "Results", date_str, run_name, "bkg_checks")
+    os.makedirs(out_dir, exist_ok=True)
+    
+    centers = 0.5 * (bins[:-1] + bins[1:])
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Raw Data
+    ax.step(centers, raw_c, where='mid', color='gray', alpha=0.5, label='Raw Data', linewidth=1)
+    # Scaled Background
+    ax.step(centers, bkg_scaled_c, where='mid', color='red', alpha=0.6, linestyle='--', label=f'Scaled Bkg (factor={scale_factor:.3f})')
+    # Net Data
+    ax.step(centers, net_c, where='mid', color='blue', alpha=0.8, label='Net Spectrum', linewidth=1.5)
+    
+    ax.set_title(f"Background Subtraction: {name}\nRun: {run_name}")
+    ax.set_xlabel("ADC Channel")
+    ax.set_ylabel("Counts")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    
+    max_y = np.max(raw_c)
+    if max_y > 0:
+        ax.set_ylim(bottom=0.1, top=max_y * 1.1) 
+        
+    out_path = os.path.join(out_dir, f"subtraction_{name}.png")
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+def apply_subtraction_and_plot(res_run, bkg_data, run_path):
+    """Esegue la sottrazione e chiama la funzione di plot per gli spettri principali."""
+    t_run = res_run.get("acquisition_time_sec", 1.0)
+    t_bkg = bkg_data.get("acquisition_time_sec", 1.0)
+    if t_bkg <= 0: t_bkg = 1.0
+    
+    scale_factor = t_run / t_bkg
+    print(f"    ⚖️  Scaling Factor: {scale_factor:.4f}")
+    
+    res_sub = res_run.copy()
+    
+    # Istogrammi da sottrarre (aggiungi qui se ne servono altri)
+    targets = ["total_charge", "main_clust_charge", "main_pix_charge"]
+    
+    for key in targets:
+        if key in res_run["histograms"] and key in bkg_data["histograms"]:
+            # Estraggo bins e counts della Run
+            bins_run, counts_run = res_run["histograms"][key]
+            
+            # Estraggo bins e counts del Bkg
+            bins_bkg, counts_bkg = bkg_data["histograms"][key]
+            
+            # Se il binning è uguale, procedo
+            if len(bins_run) == len(bins_bkg) and np.allclose(bins_run, bins_bkg):
+                # Scalo il background
+                counts_bkg_scaled = counts_bkg * scale_factor
+                
+                # Sottrazione
+                counts_net = counts_run - counts_bkg_scaled
+                
+                # Plot di verifica
+                plot_subtraction_check(bins_run, counts_run, counts_bkg_scaled, counts_net, key, run_path, scale_factor)
+                
+                # Aggiorno il dizionario dei risultati con i dati netti
+                res_sub["histograms"][key] = (bins_run, counts_net)
+            else:
+                print(f"    ⚠️  Mismatch binning per {key}. Impossibile sottrarre.")
+                
+    return res_sub
 
 
-# Abilita logging locale
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+def collect_all_histograms(run_path: str, bkg_data: Optional[Dict] = None) -> Dict[str, Any]:
+    print(f"🔄 Processing: {os.path.basename(run_path)}")
+    
+    run_dir = os.path.dirname(run_path)
+    corr, calib_info = load_calibration_dynamic(run_dir)
+    print(f"    🔧 Calibrazione: {calib_info}")
 
-# ------------------------------------------------------------
-# Classe contenitore per i risultati dell'elaborazione
-# ------------------------------------------------------------
-class EventData:
-    def __init__(self):
-        # Istogrammi ADC per canale: lista di 64 array (4096 bin ciascuno)
-        self.ampliDistLG = [np.zeros(4096, dtype=float) for _ in range(64)]
+    try:
+        with uproot.open(run_path) as f:
+            data = f["fersTree"].arrays(["trigTime", "channelID", "channelDataLG"], library="np")
+    except: return {}
 
-        # Liste di variabili evento per istogrammi 1D/2D
-        self.total_charge = []
-        self.main_pix_charge = []
-        self.main_clust_charge = []
+    trigTime = data["trigTime"]
+    channelID = data["channelID"]
+    channelData = data["channelDataLG"]
+    
+    total_charge = []
+    main_clust_charge = []
+    main_pix_charge = [] 
+    
+    xglob, yglob = [], []
+    xclus, yclus = [], []
+    
+    xyglob_x, xyglob_y = [], []
+    xyclus_x, xyclus_y = [], []
+    
+    pixmapglob_x, pixmapglob_y, pixmapglob_w = [], [], []
+    
+    npix5by5_list = []
+    npix7by7_list = []
+    npixdiff7vs5_list = [] 
+    
+    pixmapglob = np.zeros((8, 8), dtype=float)
+    ampliDistLG = np.zeros((64, 4096), dtype=int)
 
-        self.npix5 = []
-        self.npix7 = []
-        self.npixdiff57 = []
+    for j in tqdm(range(len(channelID)), desc="Events", leave=False):
+        chids = channelID[j]
+        vals = channelData[j]
+        if len(chids) == 0: continue
 
-        self.xglob = []
-        self.yglob = []
-        self.xclus = []
-        self.yclus = []
+        vals_corr = vals * corr[chids]
+        max_i = int(np.argmax(vals_corr))
+        max_id = chids[max_i]
+        max_v_corr = vals_corr[max_i]
 
-        # Mappe 8x8 globali e di cluster
-        self.pixmapglob = np.zeros((8, 8), dtype=float)
-        self.pixmapclus = np.zeros((8, 8), dtype=float)
+        sum_signal = 0
+        sum_cluster = 0
+        n5 = 0; n7 = 0
+        
+        chglob_centroid = 0.0; pix_x = 0.0; pix_y = 0.0
+        chclus = 0.0; poscx = 0.0; poscy = 0.0
 
+        for k, cid in enumerate(chids):
+            v_raw = vals[k] 
+            v_c = vals_corr[k]
+            adc = v_c - PEDESTAL
+            
+            if v_c > THR_CENTROID:
+                chglob_centroid += adc
+                pix_x += adc * CH_ID_2_MAP_X[cid]
+                pix_y += adc * CH_ID_2_MAP_Y[cid]
 
-# ------------------------------------------------------------
-# Costruzione istogrammi e fit dei risultati raccolti
-# ------------------------------------------------------------
-def compute_fits_from_eventdata(out: EventData):
-    """
-    Costruisce gli istogrammi 1D/2D dai dati della run
-    e calcola i fit gaussiani.
-    Restituisce un dizionario 'fits' e uno 'histograms'.
-    """
+            if v_c < THR: continue
+            
+            sum_signal += adc
+            
+            if 0 <= adc < 4096: 
+                ampliDistLG[cid, int(adc)] += 1
+            
+            weight = v_c / 4095.0
+            pixmapglob[CH_ID_2_MAP_X[cid], CH_ID_2_MAP_Y[cid]] += weight
+            
+            pixmapglob_x.append(CH_ID_2_MAP_X[cid])
+            pixmapglob_y.append(CH_ID_2_MAP_Y[cid])
+            pixmapglob_w.append(weight)
 
-    # --- Istogramma della carica totale ---
-    charge_hist, charge_bins = np.histogram(out.total_charge, bins=50)
-    charge_centers = 0.5 * (charge_bins[:-1] + charge_bins[1:])
-    charge_fit = gaussian_fit(charge_centers, charge_hist)
+            dx = abs(CH_ID_2_MAP_X[cid] - CH_ID_2_MAP_X[max_id])
+            dy = abs(CH_ID_2_MAP_Y[cid] - CH_ID_2_MAP_Y[max_id])
+            
+            if dx < 3 and dy < 3:
+                sum_cluster += adc
+                n5 += 1
+                chclus += adc
+                poscx += adc * CH_ID_2_MAP_X[cid]
+                poscy += adc * CH_ID_2_MAP_Y[cid]
+            
+            if dx < 4 and dy < 4:
+                n7 += 1
 
-    # --- Istogramma xglob ---
-    x_hist, x_bins = np.histogram(out.xglob, bins=50)
-    x_centers = 0.5 * (x_bins[:-1] + x_bins[1:])
-    x_fit = gaussian_fit(x_centers, x_hist)
+        if max_v_corr < 4000:
+            total_charge.append(sum_signal)
+            if sum_cluster > 0:
+                main_clust_charge.append(sum_cluster)
+            
+            main_pix_charge.append(int(vals[max_i] - PEDESTAL))
+            
+            if chglob_centroid > 0:
+                xg = ((pix_x / chglob_centroid) - 3.5) * PIX_SIZE
+                yg = ((pix_y / chglob_centroid) - 3.5) * PIX_SIZE
+                xglob.append(xg); yglob.append(yg)
+                xyglob_x.append(xg); xyglob_y.append(yg)
 
-    # --- Istogramma yglob ---
-    y_hist, y_bins = np.histogram(out.yglob, bins=50)
-    y_centers = 0.5 * (y_bins[:-1] + y_bins[1:])
-    y_fit = gaussian_fit(y_centers, y_hist)
+            if chclus > 0:
+                xc = ((poscx / chclus) - 3.5) * PIX_SIZE
+                yc = ((poscy / chclus) - 3.5) * PIX_SIZE
+                xclus.append(xc); yclus.append(yc)
+                xyclus_x.append(xc); xyclus_y.append(yc)
 
-    # --- Fit 2D della mappa cluster (8x8) ---
-    xgrid, ygrid = np.meshgrid(np.arange(8), np.arange(8))
-    fit2d = gaussian2d_fit(xgrid, ygrid, out.pixmapclus)
+            npix5by5_list.append(n5)
+            npix7by7_list.append(n7)
+            npixdiff7vs5_list.append(n7 - n5)
 
-    return {
-        "charge": charge_fit,
-        "xglob": x_fit,
-        "yglob": y_fit,
-        "spot2d": fit2d
-    }, {
-        "charge": (charge_centers, charge_hist),
-        "xglob": (x_centers, x_hist),
-        "yglob": (y_centers, y_hist)
-    }
+    res = {"histograms": {}, "maps": {}, "raw_data": {}, "scatter_data": {}}
+    res["calibration_info"] = calib_info 
+    
+    def add_hist(name, data, bins, rng):
+        cnt, bns = np.histogram(data, bins=bins, range=rng)
+        res["histograms"][name] = (bns, cnt)
 
+    add_hist("total_charge", total_charge, 251, (-5, 10005))
+    add_hist("main_clust_charge", main_clust_charge, 351, (-5, 7005))
+    add_hist("main_pix_charge", main_pix_charge, 351, (-5, 7005))
+    
+    add_hist("npix5by5", npix5by5_list, 26, (0, 25))
+    add_hist("npix7by7", npix7by7_list, 50, (0, 49))
+    add_hist("npixdiff7vs5", npixdiff7vs5_list, 26, (0, 25))
 
-# ------------------------------------------------------------
-# Funzione di utilità: da channel ID a coordinate (0..7, 0..7)
-# ------------------------------------------------------------
-def channel_id_to_xy(cid):
-    """
-    Conversione semplificata ID → coordinate 8x8.
-    Nota: nel vecchio script usavi liste chID2mapX e chID2mapY.
-    Qui assumiamo una mappa standard row-major.
-    Se necessario la sostituiremo con la mappa reale.
-    """
-    x = cid % 8
-    y = cid // 8
-    return x, y
+    add_hist("xglob", xglob, 12, (-12.8, 12.8))
+    add_hist("yglob", yglob, 12, (-12.8, 12.8))
+    add_hist("xclus", xclus, 12, (-12.8, 12.8))
+    add_hist("yclus", yclus, 12, (-12.8, 12.8))
 
+    res["scatter_data"]["xyglob_x"] = np.array(xyglob_x)
+    res["scatter_data"]["xyglob_y"] = np.array(xyglob_y)
+    res["scatter_data"]["xyclus_x"] = np.array(xyclus_x)
+    res["scatter_data"]["xyclus_y"] = np.array(xyclus_y)
+    
+    res["scatter_data"]["pixmapglob_x"] = np.array(pixmapglob_x)
+    res["scatter_data"]["pixmapglob_y"] = np.array(pixmapglob_y)
+    res["scatter_data"]["pixmapglob_w"] = np.array(pixmapglob_w)
 
-# ------------------------------------------------------------
-# Processamento di UN SOLO evento
-# ------------------------------------------------------------
-def process_single_event(ids, vals):
-    """
-    Processa un singolo evento FERS.
-    Calcola:
-    - pixel massimo
-    - carica totale e cariche cluster
-    - numero pixel nei cluster 5x5 e 7x7
-    - baricentri globali e cluster
-    - mappe 8x8 locali
+    res["maps"]["pixmapglob"] = pixmapglob.T 
+    res["ampliDistLG"] = ampliDistLG
+    res["acquisition_time_sec"] = elapsed_time(trigTime)
+    
+    res["raw_data"]["total_charge"] = np.array(total_charge)
 
-    Ritorna un dict con i contributi dell'evento.
-    """
-
-    thr = cfg.threshold
-    ped = cfg.pedestal
-    pix = cfg.pixel_size
-
-    # Se evento vuoto
-    if len(vals) == 0:
-        return None
-
-    # Pixel max
-    max_i = np.argmax(vals)
-    max_cid = ids[max_i]
-    max_v = vals[max_i]
-
-    # Evento saturo
-    if max_v >= 4000:
-        return None
-
-    # Coordinate max pixel
-    max_x, max_y = channel_id_to_xy(max_cid)
-
-    # Variabili cumulative
-    total_charge = 0.0
-    main_pix_charge = 0.0
-    main_clust_charge = 0.0
-    np5 = 0
-    np7 = 0
-
-    posgx = 0.0
-    posgy = 0.0
-    chglob = 0.0
-
-    poscx = 0.0
-    poscy = 0.0
-    chclus = 0.0
-
-    # Mappe locali
-    pixmapglob_ev = np.zeros((8, 8))
-    pixmapclus_ev = np.zeros((8, 8))
-
-    # Loop sui canali dell'evento
-    for cid, v in zip(ids, vals):
-        if v < thr:
-            continue
-
-        adc = v - ped
-        if adc <= 0:
-            continue
-
-        # Aggiorna totale
-        total_charge += adc
-
-        # Coordinate pixel
-        x, y = channel_id_to_xy(cid)
-        pixmapglob_ev[y, x] += v / 4000.0
-
-        # Baricentro globale
-        chglob += adc
-        posgx += adc * x
-        posgy += adc * y
-
-        # Pixel massimo
-        if cid == max_cid:
-            main_pix_charge = adc
-
-        # Cluster 5x5
-        if abs(x - max_x) <= 2 and abs(y - max_y) <= 2:
-            np5 += 1
-            main_clust_charge += adc
-            pixmapclus_ev[y, x] += v / 4000.0
-            chclus += adc
-            poscx += adc * x
-            poscy += adc * y
-
-        # Cluster 7x7
-        if abs(x - max_x) <= 3 and abs(y - max_y) <= 3:
-            np7 += 1
-
-    # Controllo eventi senza carica
-    if chglob == 0:
-        return None
-
-    # Coordinate baricentro globale
-    xg = ((posgx / chglob) - 3.5) * pix
-    yg = ((posgy / chglob) - 3.5) * pix
-
-    # Coordinate cluster
-    if chclus > 0:
-        xc = ((poscx / chclus) - 3.5) * pix
-        yc = ((poscy / chclus) - 3.5) * pix
-    else:
-        xc = None
-        yc = None
-
-    return {
-        "total_charge": total_charge,
-        "main_pix_charge": main_pix_charge,
-        "main_clust_charge": main_clust_charge,
-        "np5": np5,
-        "np7": np7,
-        "npdiff": np7 - np5,
-        "xg": xg,
-        "yg": yg,
-        "xc": xc,
-        "yc": yc,
-        "pixmapglob": pixmapglob_ev,
-        "pixmapclus": pixmapclus_ev,
-        "max_cid": max_cid,
-        "vals": vals,
-    }
-
-
-# ------------------------------------------------------------
-# Funzione principale: processa TUTTI gli eventi del file ROOT
-# ------------------------------------------------------------
-def collect_all_histograms(root_path):
-    """
-    Legge il file ROOT e aggrega gli eventi in un oggetto EventData.
-    """
-
-    logger.info(f"Apertura file ROOT: {root_path}")
-    out = EventData()
-
-    with uproot.open(root_path) as f:
-        tree = f["fersTree"]
-        arrays = tree.arrays(["channelID", "channelDataLG"], library="np")
-
-    channel_ids = arrays["channelID"]
-    channel_vals = arrays["channelDataLG"]
-
-    n_events = len(channel_vals)
-    logger.info(f"Trovati {n_events} eventi.")
-
-    # Loop eventi
-    for ev in range(n_events):
-        ids = channel_ids[ev]
-        vals = channel_vals[ev]
-
-        res = process_single_event(ids, vals)
-        if res is None:
-            continue
-
-        # Aggiorna EventData
-        out.total_charge.append(res["total_charge"])
-        out.main_pix_charge.append(res["main_pix_charge"])
-        out.main_clust_charge.append(res["main_clust_charge"])
-
-        out.npix5.append(res["np5"])
-        out.npix7.append(res["np7"])
-        out.npixdiff57.append(res["npdiff"])
-
-        out.xglob.append(res["xg"])
-        out.yglob.append(res["yg"])
-
-        if res["xc"] is not None:
-            out.xclus.append(res["xc"])
-            out.yclus.append(res["yc"])
-
-        out.pixmapglob += res["pixmapglob"]
-        out.pixmapclus += res["pixmapclus"]
-
-        # Aggiorna istogrammi ADC per pixel
-        vals = res["vals"]
-        for cid, v in zip(ids, vals):
-            if 0 <= v < 4096:
-                out.ampliDistLG[cid][int(v)] += 1
-
-    # Fine processamento eventi
-    logger.info("Processamento completato.")
-
-    # ---- Calcolo istogrammi e fit ----
-    fits, histograms = compute_fits_from_eventdata(out)
-
-    return {
-        "raw": out,
-        "fits": fits,
-        "histograms": histograms,
-        "maps": {
-            "pixmapglob": out.pixmapglob,
-            "pixmapclus": out.pixmapclus
-        }
-    }
-
-
+    if bkg_data:
+        # Usa la nuova funzione interna per sottrarre E generare i grafici
+        res_sub = apply_subtraction_and_plot(res, bkg_data, run_path)
+        res_sub["scatter_data"] = res["scatter_data"] 
+        return res_sub
+    
+    return res

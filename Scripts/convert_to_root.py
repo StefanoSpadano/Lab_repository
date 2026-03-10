@@ -8,192 +8,234 @@ import re
 import os
 from datetime import datetime
 
-# Choose level and format of the log
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
-# --- Fix working directory automatically ---
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# --- Fix working directory automatically: colloca la repo come root ---
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(ROOT_DIR)
-print(f"[INFO] Working directory fissata automaticamente a: {ROOT_DIR}")
+logging.info(f"Working directory fissata automaticamente a: {ROOT_DIR}")
 
+def _parse_and_collect(ifile, gain="LG"):
+    """
+    Legge un singolo file txt (RunN_list.txt) e costruisce le liste per il TTree.
+    Restituisce: (base_name_clean, trig_ids, trig_times, all_chan_ids, all_data_LG, all_data_HG)
+    """
+    trig_ids = []
+    trig_times = []
+    all_chan_ids = []
+    all_data_LG = []
+    all_data_HG = []
 
-def convert_txt_to_root(ifilename, ofilename, gain="LG"):
-    """
-    Parse the text file and write out a ROOT file with a single TTree 'fersTree'.
-    
-    Parameters
-    ----------
-    ifilename : str
-        Path to input ASCII file.
-    ofilename : str
-        Path to output .root file.
-    gain : {'LG','HG','BOTH'}
-        Which gain channels to record.
-    """
-    # Containers for all events
-    trig_ids       = []
-    trig_times     = []
-    all_chan_ids   = []
-    all_data_LG    = []
-    all_data_HG    = []
-    
-    # Temporary per-event buffers
-    chan_ids_evt   = []
-    data_LG_evt    = []
-    data_HG_evt    = []
-    current_trig_id   = None
+    chan_ids_evt = []
+    data_LG_evt = []
+    data_HG_evt = []
+    current_trig_id = None
     current_trig_time = None
-    
     event_counter = 0
-    with open(ifilename, 'r') as f:
+
+    with open(ifile, "r") as f:
         for line in f:
-            # skip headers and comments
             if "Tstamp_us" in line or "//" in line:
                 continue
-            
             parts = line.split()
             if not parts:
                 continue
-            
             timecheck = parts[0]
-            # continuation of current event?
+
+            # continuation line (per-pixel)
             if "." not in timecheck:
-                # push channel-by-channel data
+                # push pixel data for the current event
                 if gain == "LG":
                     channel = int(parts[1]); datum = int(parts[2])
                     data_LG_evt.append(datum)
                 elif gain == "HG":
                     channel = int(parts[1]); datum = int(parts[4])
                     data_HG_evt.append(datum)
-                else:  # BOTH
+                else:
                     channel = int(parts[1])
                     datumLG = int(parts[2]); datumHG = int(parts[3])
-                    data_LG_evt.append(datumLG)
-                    data_HG_evt.append(datumHG)
+                    data_LG_evt.append(datumLG); data_HG_evt.append(datumHG)
                 chan_ids_evt.append(channel)
-            
             else:
-                # new event: first, save previous (if any)
-                if event_counter > 0:
+                # new event header line -> flush previous event if exists
+                if event_counter > 0 and current_trig_id is not None:
                     trig_ids.append(current_trig_id)
                     trig_times.append(current_trig_time)
                     all_chan_ids.append(chan_ids_evt)
                     all_data_LG.append(data_LG_evt)
                     all_data_HG.append(data_HG_evt)
-                
-                # reset buffers
-                chan_ids_evt   = []
-                data_LG_evt    = []
-                data_HG_evt    = []
-                
-                # parse new-event line
+
+                # reset per-event buffers
+                chan_ids_evt = []
+                data_LG_evt = []
+                data_HG_evt = []
+
                 current_trig_time = float(timecheck)
                 if gain == "LG":
-                    # time, trig_id, board, channel, datumLG
                     current_trig_id = int(parts[1])
                     channel = int(parts[3]); datum = int(parts[4])
                     data_LG_evt.append(datum)
                 elif gain == "HG":
-                    # time, trig_id, board, channel, S1, datumHG
                     current_trig_id = int(parts[1])
                     channel = int(parts[3]); datum = int(parts[5])
                     data_HG_evt.append(datum)
-                else:  # BOTH
-                    # time, trig_id, board, channel, datumLG, datumHG
+                else:
                     current_trig_id = int(parts[1])
                     channel = int(parts[3])
                     datumLG = int(parts[4]); datumHG = int(parts[5])
-                    data_LG_evt.append(datumLG)
-                    data_HG_evt.append(datumHG)
-                
+                    data_LG_evt.append(datumLG); data_HG_evt.append(datumHG)
+
                 chan_ids_evt.append(channel)
                 event_counter += 1
-    
-    # write the last event
+
+    # write last event
     if event_counter > 0 and current_trig_id is not None:
         trig_ids.append(current_trig_id)
         trig_times.append(current_trig_time)
         all_chan_ids.append(chan_ids_evt)
         all_data_LG.append(data_LG_evt)
         all_data_HG.append(data_HG_evt)
-    
-    # prepare arrays / jagged arrays
+
+    base_name = os.path.splitext(os.path.basename(ifile))[0]
+    # clean name: remove '_list' and date-like patterns if present -> keep RunN
+    clean_name = re.sub(r"(_?\d{4}[-_]\d{2}[-_]\d{2}|_?list)", "", base_name, flags=re.IGNORECASE)
+    clean_name = clean_name.strip("_")
+    if clean_name == "":
+        clean_name = base_name
+
+    return clean_name, trig_ids, trig_times, all_chan_ids, all_data_LG, all_data_HG
+
+def _write_root(ofile, trig_ids, trig_times, all_chan_ids, all_data_LG, all_data_HG):
+    """
+    Scrive il ROOT TTree. ATTENZIONE: ogni branch deve avere la stessa lunghezza.
+    Per il run_time_sec (metadato) ripetiamo lo stesso valore per ogni evento così la forma è coerente.
+    """
+    n_events = len(trig_ids)
+    # calcolo run_time_sec in secondi dalla differenza dei timestamps (sono in microsec)
+    if n_events >= 2:
+        run_time_sec = (float(trig_times[-1]) - float(trig_times[0])) * 1e-6
+    else:
+        run_time_sec = 0.0
+
+    # Replichiamo run_time_sec per ogni evento (evita l'errore di shape)
+    run_time_array = np.full(n_events, run_time_sec, dtype=np.float64)
+
     arr = {
-        "trigID":     np.array(trig_ids,   dtype=np.uint32),
-        "trigTime":   np.array(trig_times, dtype=np.float64),
-        "channelID":      ak.Array(all_chan_ids),
-        "channelDataLG":  ak.Array(all_data_LG),
-        "channelDataHG":  ak.Array(all_data_HG),
+        "trigID": np.array(trig_ids, dtype=np.uint32),
+        "trigTime": np.array(trig_times, dtype=np.float64),
+        "channelID": ak.Array(all_chan_ids),
+        "channelDataLG": ak.Array(all_data_LG),
+        "channelDataHG": ak.Array(all_data_HG),
+        "run_time_sec": run_time_array
     }
-    
-    # write to ROOT
-    with uproot.recreate(ofilename) as root_file:
+
+    # scrittura file root
+    with uproot.recreate(ofile) as root_file:
         root_file["fersTree"] = arr
-        logging.info(f"File ROOT salvato con successo: {ofilename}")
 
+    return n_events, run_time_sec, trig_times[0] if len(trig_times) else None, trig_times[-1] if len(trig_times) else None
 
+def convert_single_file(ifile, out_dir, gain="LG"):
+    if not os.path.exists(ifile):
+        raise FileNotFoundError(f"Input file non trovato: {ifile}")
+
+    os.makedirs(out_dir, exist_ok=True)
+    clean_name, trig_ids, trig_times, all_chan_ids, all_data_LG, all_data_HG = _parse_and_collect(ifile, gain=gain)
+
+    # nome di output: RunN.root (clean_name dovrebbe essere Run0 o simile)
+    out_file = os.path.join(out_dir, f"{clean_name}.root")
+
+    n_events = 0
+    run_time_sec = 0.0
+    first_ts = last_ts = None
+    if len(trig_ids) == 0:
+        logging.warning(f"Nessun evento estratto da {ifile}. Creo comunque file ROOT vuoto con poche info.")
+        # scrivo comunque ttree vuoto con arrays vuoti compatibili
+        _ = _write_root(out_file, [], [], [], [], [])
+    else:
+        n_events, run_time_sec, first_ts, last_ts = _write_root(out_file, trig_ids, trig_times, all_chan_ids, all_data_LG, all_data_HG)
+
+    logging.info(f"File ROOT salvato con successo: {out_file}")
+    logging.info(f"  eventi: {n_events}, run_time_sec: {run_time_sec:.6f} s (first={first_ts}, last={last_ts})")
+    return out_file
+
+def convert_folder_date(date_str=None, src_base="Data"):
+    """
+    Se date_str è None: cerca l'ultima cartella in Data/ che sembra una data (YYYY or YYYY-MM-DD or YYYY_MM_DD).
+    Poi converte tutti i file Run*_list.txt dentro quella cartella.
+    Output in Data/Data_converted/<date_str>/RunN.root
+    """
+    data_root = os.path.join(ROOT_DIR, "Data")
+    if date_str is None:
+        # trova cartelle in Data/ con pattern data
+        cand = [d for d in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, d))]
+        # ordina per data di creazione/modifica
+        cand_sorted = sorted(cand, key=lambda x: os.path.getmtime(os.path.join(data_root, x)), reverse=True)
+        if not cand_sorted:
+            raise FileNotFoundError("Nessuna cartella trovata in Data/")
+        chosen = cand_sorted[0]
+        date_str = chosen
+        logging.info(f"Nessuna data passata: scelgo l'ultima cartella in Data/: {date_str}")
+    else:
+        if not os.path.isdir(os.path.join(data_root, date_str)):
+            raise FileNotFoundError(f"Cartella Data/{date_str} non trovata")
+
+    src_dir = os.path.join(data_root, date_str)
+    target_dir = os.path.join(ROOT_DIR, "Data", "Data_converted", date_str)
+    os.makedirs(target_dir, exist_ok=True)
+
+    # trova file Run*_list*.txt
+    files = sorted([os.path.join(src_dir, f) for f in os.listdir(src_dir)
+                   if re.match(r"(?i)^Run\d+.*list.*\.txt$", f)])
+    if not files:
+        logging.warning(f"Nessun Run*_list.txt trovato in {src_dir}")
+        return []
+
+    out_files = []
+    for f in files:
+        try:
+            outf = convert_single_file(f, target_dir)
+            out_files.append(outf)
+        except Exception as e:
+            logging.error(f"Errore convertendo {f}: {e}")
+
+    return out_files
 
 if __name__ == "__main__":
-    # setup logging 
-    logging.basicConfig(
-        level=logging.INFO,
-        format='[%(levelname)s] %(message)s'
-    )
-
-    parser = argparse.ArgumentParser(description="Convert FERS .txt to ROOT")
-    parser.add_argument("input_file", help="Percorso al file .txt")
-    parser.add_argument(
-        "--gain", choices=["LG", "HG", "BOTH"],
-        help="Gain da usare (opzionale, se non specificato tenta di dedurlo dal nome del file)"
-    )
+    parser = argparse.ArgumentParser(description="Convert FERS .txt -> ROOT (RunN.root) in Data/Data_converted/<date>/")
+    group = parser.add_mutually_exclusive_group(required=False)
+    group.add_argument("--input-file", "-i", help="Percorso file .txt singolo (es. Data/.../Run0_list.txt)")
+    group.add_argument("--date", "-d", help="Nome cartella data in Data/ (es. 2025-12-02). Se omesso usa l'ultima cartella in Data/)")
+    parser.add_argument("--gain", choices=["LG", "HG", "BOTH"], help="Gain (se non specificato prova a dedurlo dal nome dei file)")
     args = parser.parse_args()
 
-    # base name of the source file
-    base_name = os.path.splitext(os.path.basename(args.input_file))[0]
+    if args.input_file:
+        # converto un file singolo, salvo in Data/Data_converted/<date_from_filepath> se possibile
+        inpath = os.path.abspath(args.input_file)
+        base_name = os.path.splitext(os.path.basename(inpath))[0]
+        # se il percorso contiene una cartella data, usiamola come date_str
+        parent = os.path.basename(os.path.dirname(inpath))
+        date_match = re.search(r"\d{4}[-_]\d{2}[-_]\d{2}", parent)
+        if date_match:
+            date_str = parent
+        else:
+            # fallback: salva direttamente in Data_converted root
+            date_str = None
 
-    # base directory to store converted files
-    base_output_dir = os.path.join("Data", "Data_converted")
+        if args.gain:
+            gain = args.gain
+        else:
+            gm = re.search(r"(LG|HG|BOTH)", base_name, re.IGNORECASE)
+            gain = gm.group(1).upper() if gm else "LG"
 
-    # check if the file has a date already in its name (format AAAA_MM_GG or AAAA-MM-GG)
-    date_match = re.search(r"(\d{4}[-_]\d{2}[-_]\d{2})", base_name)
-
-    if date_match:
-        # if a date exists then create a folder to store files for that date
-        date_str = date_match.group(1).replace("-", "_")  # uniform separators
-        out_dir = os.path.join(base_output_dir, date_str)
+        if date_str:
+            out_dir = os.path.join(ROOT_DIR, "Data", "Data_converted", date_str)
+        else:
+            out_dir = os.path.join(ROOT_DIR, "Data", "Data_converted")
         os.makedirs(out_dir, exist_ok=True)
-        logging.info(f"Trovata data nel nome del file: {date_str} → creerò la cartella {out_dir}")
-
-        # cleaning before final name
-        clean_name = re.sub(r"(_?\d{4}[-_]\d{2}[-_]\d{2}|_?list)", "", base_name, flags=re.IGNORECASE)
-        output_file = os.path.join(out_dir, f"{clean_name}.root")
-
+        convert_single_file(inpath, out_dir, gain=gain)
     else:
-        # if no date then save it in Data_converted as it is
-        out_dir = base_output_dir
-        os.makedirs(out_dir, exist_ok=True)
-        logging.info("Nessuna data trovata nel nome del file: salvataggio diretto in Data_converted/")
-
-        output_file = os.path.join(out_dir, f"{base_name}_LG.root")
-
-    # check if the name comes with a different type of gain from LG otherwise use LG
-    if args.gain:
-        gain = args.gain
-    else:
-        gain_match = re.search(r"(LG|HG|BOTH)", base_name, re.IGNORECASE)
-        gain = gain_match.group(1).upper() if gain_match else "LG"
-        logging.info(f"Gain dedotto automaticamente: {gain}")
-
-    logging.info(f"Starting conversion: {args.input_file} → {output_file}")
-
-    try:
-        convert_txt_to_root(args.input_file, output_file, gain)
-        logging.info(f"File ROOT creato con successo: {output_file}")
-    except Exception as e:
-        logging.error(f"Errore durante la conversione: {e}")
-
+        # converte tutta la cartella data (ultima o quella passata)
+        convert_folder_date(date_str=args.date)
 
 
