@@ -3,14 +3,14 @@ import sys
 import pytest
 import numpy as np
 import pandas as pd
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 isolpharm_dir = os.path.dirname(os.path.dirname(current_dir))
 sys.path.insert(0, isolpharm_dir)
 
-from Scripts.analysis.event_processing import load_calibration_dynamic, apply_subtraction_and_plot, elapsed_time
+from Scripts.analysis.event_processing import collect_all_histograms, load_calibration_dynamic, apply_subtraction_and_plot, elapsed_time
 
 def test_should_calculate_correct_elapsed_time():
     """
@@ -251,3 +251,57 @@ def test_should_ignore_invalid_entries_in_calibration_file(tmp_path):
     # Check the output string mentions the valid channel count (2 valid channels)
     assert "calibration.xlsx" in calib_source
     assert "2 ch" in calib_source
+
+from unittest.mock import patch, MagicMock
+import numpy as np
+from Scripts.analysis.event_processing import collect_all_histograms
+
+@patch("Scripts.analysis.event_processing.uproot.open")
+def test_should_process_events_and_generate_histograms(mock_uproot, tmp_path):
+    """
+    Tests that the function reads the physical data (mocked), applies the thresholds,
+    and generates the correct structure of the results.
+    """
+    # GIVEN: We build fake data arrays as if they were coming from a ROOT file.
+    # Event 0: Channels 0 and 1 are on (with signals above the PEDESTAL of 50 and the THR of 75)
+    # Event 1: Channel 5 is on
+    fake_data = {
+        "trigTime": np.array([1000000, 2000000]),
+        # We use dtype=object because they are variable-length arrays (ragged arrays)
+        "channelID": np.array([[0, 1], [5]], dtype=object),
+        "channelDataLG": np.array([[200, 150], [300]], dtype=object) 
+    }
+
+    # Using MagicMock we simulate the behavior of 'with uproot.open(..) as f: f["fersTree"].arrays(...)'
+    mock_tree = MagicMock()
+    mock_tree.arrays.return_value = fake_data
+    
+    mock_file = MagicMock()
+    mock_file.__getitem__.return_value = mock_tree # Simula f["fersTree"]
+    
+    # This simulates the context manager (the 'with' keyword)
+    mock_uproot.return_value.__enter__.return_value = mock_file
+    # -------------------------
+
+    # We build a fake directory just to avoid making the calibration upset
+    fake_run_dir = tmp_path / "Run0"
+    fake_run_dir.mkdir()
+    fake_root_path = fake_run_dir / "Run0.root"
+
+    # WHEN: We call the function (the background is None)
+    result = collect_all_histograms(str(fake_root_path))
+
+    # THEN: Control that the final dictionary exists and has the correct keys
+    assert "histograms" in result
+    assert "total_charge" in result["histograms"]
+    assert "maps" in result
+    
+    # The event 0 had 200 and 150. Subtracted the pedestal (50): (200-50) + (150-50) = 150 + 100 = 250
+    # The event 1 had 300. Subtracted the pedestal (50): 300 - 50 = 250
+    # Therefore, the calculated raw values should be two events of 250!
+    assert len(result["raw_data"]["total_charge"]) == 2
+    assert result["raw_data"]["total_charge"][0] == 250
+    assert result["raw_data"]["total_charge"][1] == 250
+    
+    # Verify the time calculation: (2.000.000 - 1.000.000) us = 1.0 seconds
+    assert result["acquisition_time_sec"] == 1.0
