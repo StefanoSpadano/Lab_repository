@@ -1,0 +1,253 @@
+import os
+import sys
+import pytest
+import numpy as np
+import pandas as pd
+from unittest.mock import patch
+
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+isolpharm_dir = os.path.dirname(os.path.dirname(current_dir))
+sys.path.insert(0, isolpharm_dir)
+
+from Scripts.analysis.event_processing import load_calibration_dynamic, apply_subtraction_and_plot, elapsed_time
+
+def test_should_calculate_correct_elapsed_time():
+    """
+    Tests that the difference between timestamps in microseconds
+    is correctly converted to seconds.
+    """
+    # GIVEN: An array of timestamps in microseconds
+    # 1000000 microseconds = 1 second. 
+    # Difference between min (1.000.000) and max (3.500.000) = 2.500.000 microseconds -> 2.5 seconds
+    fake_trig_time = np.array([1000000, 2000000, 3500000])
+
+    # WHEN: We call the function
+    result = elapsed_time(fake_trig_time)
+
+    # THEN: The result should be exactly 2.5
+    assert result == 2.5
+
+def test_should_return_one_second_for_empty_arrays():
+    """
+    Tests that if the input array is empty, the function returns 1.0 seconds.
+    The 1 second clause is made so that later on is possible to avoid crashes due to division by zero when calculating rates or scaling background.
+    """
+    # GIVEN: An empty array (no events recorded)
+    empty_trig_time = np.array([])
+
+    # WHEN: We call the function
+    result = elapsed_time(empty_trig_time)
+
+    # THEN: The result should be the default safety value of 1.0
+    assert result == 1.0
+
+# @patch intercepts the plot function and replaces it with a "fake" one (mock_plot)
+@patch("Scripts.analysis.event_processing.plot_subtraction_check")
+def test_should_correctly_subtract_scaled_background(mock_plot):
+    """
+    Tests that the background is correctly scaled over time and subtracted
+    from the run data.
+    """
+    # GIVEN: Fake data for both background and amplification lines data
+    bins = np.array([0, 1, 2, 3])
+    run_counts = np.array([100, 200, 150])
+    bkg_counts = np.array([10,  20,  15])
+
+    res_run = {
+        "acquisition_time_sec": 10.0,
+        "histograms": {
+            "total_charge": (bins, run_counts)
+        }
+    }
+
+    bkg_data = {
+        "acquisition_time_sec": 5.0, # Let's say that the background acquisition time is half of the run time
+        "histograms": {
+            "total_charge": (bins, bkg_counts)
+        }
+    }
+
+    # WHEN: We call the function
+    result = apply_subtraction_and_plot(res_run, bkg_data, "fake_run_path.root")
+
+    # THEN: We check the math
+    # The scaling factor should be t_run / t_bkg = 10.0 / 5.0 = 2.0
+    # So the scaled background is: [20, 40, 30]
+    # Subtraction (run - scaled_bkg): [100-20, 200-40, 150-30] = [80, 160, 120]
+    
+    net_bins, net_counts = result["histograms"]["total_charge"]
+    
+    # In order to compare NumPy arrays, we use np.testing.assert_array_equal
+    np.testing.assert_array_equal(net_bins, bins)
+    np.testing.assert_array_equal(net_counts, np.array([80, 160, 120]))
+    
+    # Verify that the plot function was called (even if we mocked it)
+    mock_plot.assert_called_once()
+
+@patch("Scripts.analysis.event_processing.plot_subtraction_check")
+def test_should_skip_if_bins_mismatch(mock_plot):
+    """
+    Tests that if the bins of the run and background histograms do not match,
+    the function should skip subtraction and return the original run data.
+    """
+    # GIVEN: Fake data with mismatching bins
+    run_bins = np.array([0, 1, 2, 3])
+    bkg_bins = np.array([0, 2, 4])  # Different binning
+    run_counts = np.array([100, 200, 150])
+    bkg_counts = np.array([10, 20])
+
+    res_run = {
+        "acquisition_time_sec": 10.0,
+        "histograms": {
+            "total_charge": (run_bins, run_counts)
+        }
+    }
+
+    bkg_data = {
+        "acquisition_time_sec": 5.0,
+        "histograms": {
+            "total_charge": (bkg_bins, bkg_counts)
+        }
+    }
+
+    # WHEN: We call the function
+    result = apply_subtraction_and_plot(res_run, bkg_data, "fake_run_path.root")
+
+    # THEN: The result should be unchanged (no subtraction)
+    net_bins, net_counts = result["histograms"]["total_charge"]
+    
+    np.testing.assert_array_equal(net_bins, run_bins)
+    np.testing.assert_array_equal(net_counts, run_counts)
+    
+    # Verify that the plot function was NOT called since subtraction was skipped
+    mock_plot.assert_not_called()
+
+@patch("Scripts.analysis.event_processing.plot_subtraction_check")
+def test_should_prevent_zero_division_for_invalid_bkg_time(mock_plot):
+    """
+    Tests that if the background acquisition time is zero, the function should
+    handle it gracefully and not perform subtraction (to avoid division by zero).
+    """
+    # GIVEN: Fake data with zero background acquisition time
+    bins = np.array([0, 1, 2, 3])
+    run_counts = np.array([100, 200, 150])
+    bkg_counts = np.array([10, 20, 30])
+
+    res_run = {
+        "acquisition_time_sec": 10.0,
+        "histograms": {
+            "total_charge": (bins, run_counts)
+        }
+    }
+
+    bkg_data = {
+        "acquisition_time_sec": 0.0,  # Invalid background time
+        "histograms": {
+            "total_charge": (bins, bkg_counts)
+        }
+    }
+
+    # WHEN: We call the function
+    result = apply_subtraction_and_plot(res_run, bkg_data, "fake_run_path.root")
+
+    # THEN: The subtraction still happens but a forced t_bkg = 1.0 is used
+    net_bins, net_counts = result["histograms"]["total_charge"]
+    
+    # The background scaled by 10 and subtracted gives [0, 0, -150]
+    expected_net_counts = np.array([0, 0, -150])
+    
+    np.testing.assert_array_equal(net_bins, bins)
+    np.testing.assert_array_equal(net_counts, expected_net_counts)
+    
+    # Since the subtraction still happens (with a fallback time), the plot function should be called
+    mock_plot.assert_called_once()
+
+
+def test_should_load_valid_calibration_excel(tmp_path):
+    """
+    Tests that a valid calibration Excel file is loaded correctly,
+    replacing commas with dots and skipping unspecified channels.
+    """
+    # GIVEN: Create a fake DataFrame and save it as an Excel file
+    # Insert a channel with a comma (e.g., 1,05) to test the text correction
+    fake_data = {
+        "Channel": ["0", "15", "63"],
+        "Correction": ["1.2", "0,95", "1.05"]
+    }
+    df = pd.DataFrame(fake_data)
+    
+    # Save the Excel file in the temporary folder (the name MUST be calibration.xlsx)
+    fake_run_dir = tmp_path / "Run_Test"
+    fake_run_dir.mkdir()
+    excel_path = fake_run_dir / "calibration.xlsx"
+    
+    # Pandas is used to write the fake file to disk
+    df.to_excel(excel_path, sheet_name="Correzioni", index=False)
+
+    # WHEN: Call the function passing the fake directory
+    corr_array, calib_source = load_calibration_dynamic(str(fake_run_dir))
+
+    # THEN: Check that the array has been updated correctly
+    assert len(corr_array) == 64
+    assert corr_array[0] == 1.2
+    assert corr_array[15] == 0.95  # The comma should have been handled!
+    assert corr_array[63] == 1.05
+    
+    # A channel not mentioned in the file must remain at the default value 1.0
+    assert corr_array[1] == 1.0 
+    
+    # Check the output string
+    assert "calibration.xlsx" in calib_source
+    assert "3 ch" in calib_source
+
+def test_should_handle_missing_calibration_file(tmp_path):
+    """
+    Tests that if the calibration Excel file is missing, the function returns
+    the default correction array and an appropriate message.
+    """
+    # GIVEN: A directory without a calibration.xlsx file
+    fake_run_dir = tmp_path / "Run_No_Calib"
+    fake_run_dir.mkdir()
+
+    # WHEN: Call the function passing the fake directory
+    corr_array, calib_source = load_calibration_dynamic(str(fake_run_dir))
+
+    # THEN: The correction array should be all ones (default)
+    assert len(corr_array) == 64
+    assert np.all(corr_array == 1.0)
+    
+    #The test should print the default value "None (Unity)" 
+    assert calib_source == "None (Unity)"
+
+def test_should_ignore_invalid_entries_in_calibration_file(tmp_path):
+    """
+    Tests that if the calibration Excel file contains invalid entries (e.g., non-numeric corrections),
+    the function should ignore those entries and keep the default value for those channels.
+    """
+    # GIVEN: Create a fake DataFrame with some invalid correction values
+    fake_data = {
+        "Channel": ["0", "15", "63"],
+        "Correction": ["1.2", "invalid", "1.05"]  # Channel 15 has an invalid correction
+    }
+    df = pd.DataFrame(fake_data)
+    
+    # Save the Excel file in the temporary folder
+    fake_run_dir = tmp_path / "Run_Invalid_Calib"
+    fake_run_dir.mkdir()
+    excel_path = fake_run_dir / "calibration.xlsx"
+    
+    df.to_excel(excel_path, sheet_name="Correzioni", index=False)
+
+    # WHEN: Call the function passing the fake directory
+    corr_array, calib_source = load_calibration_dynamic(str(fake_run_dir))
+
+    # THEN: The valid entries should be loaded, and the invalid one should be ignored
+    assert len(corr_array) == 64
+    assert corr_array[0] == 1.2
+    assert corr_array[15] == 1.0  # Invalid entry should be ignored, default remains
+    assert corr_array[63] == 1.05
+    
+    # Check the output string mentions the valid channel count (2 valid channels)
+    assert "calibration.xlsx" in calib_source
+    assert "2 ch" in calib_source
