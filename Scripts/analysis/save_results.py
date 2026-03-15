@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from analysis.io_manager import get_run_output_dir
 
-# Stile Matplotlib pulito
+# Clean Matplotlib style
 plt.style.use('seaborn-v0_8-paper')
 
 def convert_numpy(obj):
@@ -18,7 +18,7 @@ def convert_numpy(obj):
 
 def save_all_results(results, date_str, run_name):
     """
-    Salva i risultati replicando i plot Legacy (npix, xyglob 2D, ecc.)
+    Saves the results replicating the Legacy plots (npix, xyglob 2D, etc.)
     """
     base_dir = get_run_output_dir(date_str, run_name)
     dirs = {
@@ -28,12 +28,12 @@ def save_all_results(results, date_str, run_name):
     }
     for d in dirs.values(): os.makedirs(d, exist_ok=True)
 
-    print(f"💾 Salvataggio Plot stile Legacy...")
+    print(f" Saving Legacy style Plots...")
 
-    # --- 1. ISTOGRAMMI 1D (npix, charge, xglob 1D) ---
+    # 1D HISTOGRAMS (npix, charge, xglob 1D)
     if "histograms" in results:
         for name, (bins, counts) in results["histograms"].items():
-            # JSON Dati
+            # JSON Data
             with open(os.path.join(dirs["hist"], f"{name}.json"), "w") as f:
                 json.dump({"bins": convert_numpy(bins), "counts": convert_numpy(counts)}, f)
             
@@ -43,11 +43,11 @@ def save_all_results(results, date_str, run_name):
             plt.step(centers, counts, where='mid', color='royalblue', linewidth=1.5, label=name)
             plt.fill_between(centers, counts, step='mid', alpha=0.3, color='royalblue')
             
-            # Zoom per spettri carica
+            # Zoom for charge spectra
             if "charge" in name:
                 nonzero = np.where(counts > 0)[0]
                 if len(nonzero) > 0: plt.xlim(0, bins[nonzero[-1]] * 1.1)
-            # Limiti fissi per posizioni (Legacy style)
+            # Fixed limits for positions
             if name in ['xglob', 'yglob', 'xclus', 'yclus']:
                 plt.xlim(-12.8, 12.8)
             
@@ -58,26 +58,22 @@ def save_all_results(results, date_str, run_name):
             plt.savefig(os.path.join(dirs["plots"], f"{name}_sub.png"))
             plt.close()
 
-    # --- 2. MAPPE 2D & SCATTER DATA ---
+    # 2D MAPS & SCATTER DATA
     if "scatter_data" in results:
         sc = results["scatter_data"]
 
-        # =================================================================
-        # [FIX IMPORTANTE] SALVATAGGIO RAW DATA SU JSON
-        # Senza questo, calc_psf.py non ha i dati per lavorare!
-        # =================================================================
+        # Without this, calc_psf.py has no data to work with!
         scatter_json_path = os.path.join(dirs["hist"], "scatter_data.json")
         try:
-            # Convertiamo tutto il dizionario numpy in liste serializzabili
+            # Convert the entire numpy dictionary to serializable lists
             serializable_sc = {k: convert_numpy(v) for k, v in sc.items()}
             with open(scatter_json_path, "w") as f:
                 json.dump(serializable_sc, f)
-            print(f"   -> Salvato scatter_data.json (per PSF)")
+            print(f"   -> Saved scatter_data.json (for PSF)")
         except Exception as e:
-            print(f"   ⚠️ Errore salvataggio scatter JSON: {e}")
-        # =================================================================
+            print(f"   Error saving scatter JSON: {e}")
 
-        # Definizioni Plot 2D Legacy
+        # 2D Plot Definitions
         plot_defs = [
             ("xyglob_sub.png", "xyglob_x", "xyglob_y", 12, [[-12.8, 12.8], [-12.8, 12.8]]),
             ("xyclus_sub.png", "xyclus_x", "xyclus_y", 12, [[-12.8, 12.8], [-12.8, 12.8]]),
@@ -90,7 +86,7 @@ def save_all_results(results, date_str, run_name):
                 y = sc[ky]
                 w = sc.get("pixmapglob_w") if "pixmap" in out_name else None
                 
-                # Filtro valori validi
+                # Filter valid values
                 if w is None:
                     mask = (x > -100) & (y > -100) 
                     x = x[mask]; y = y[mask]
@@ -109,4 +105,4 @@ def save_all_results(results, date_str, run_name):
                     plt.savefig(os.path.join(dirs["plots"], out_name))
                     plt.close()
 
-    print(f"✅ Plot Legacy salvati in: {dirs['plots']}")
+    print(f" Legacy Plots saved in: {dirs['plots']}")
