@@ -252,10 +252,6 @@ def test_should_ignore_invalid_entries_in_calibration_file(tmp_path):
     assert "calibration.xlsx" in calib_source
     assert "2 ch" in calib_source
 
-from unittest.mock import patch, MagicMock
-import numpy as np
-from Scripts.analysis.event_processing import collect_all_histograms
-
 @patch("Scripts.analysis.event_processing.uproot.open")
 def test_should_process_events_and_generate_histograms(mock_uproot, tmp_path):
     """
@@ -281,7 +277,6 @@ def test_should_process_events_and_generate_histograms(mock_uproot, tmp_path):
     
     # This simulates the context manager (the 'with' keyword)
     mock_uproot.return_value.__enter__.return_value = mock_file
-    # -------------------------
 
     # We build a fake directory just to avoid making the calibration upset
     fake_run_dir = tmp_path / "Run0"
@@ -305,3 +300,46 @@ def test_should_process_events_and_generate_histograms(mock_uproot, tmp_path):
     
     # Verify the time calculation: (2.000.000 - 1.000.000) us = 1.0 seconds
     assert result["acquisition_time_sec"] == 1.0
+
+
+def test_should_return_empty_dict_if_root_file_invalid():
+    """
+    Tests that if the ROOT file cannot be opened (e.g., due to an error),
+    the function should return an empty dictionary.
+    """
+    # GIVEN: We simulate an error when trying to open the ROOT file
+    with patch("Scripts.analysis.event_processing.uproot.open", side_effect=Exception("File not found")):
+        # WHEN: We call the function
+        result = collect_all_histograms("non_existent_file.root")
+
+        # THEN: The result should be an empty dictionary
+        assert result == {}
+
+@patch("Scripts.analysis.event_processing.apply_subtraction_and_plot")
+@patch("Scripts.analysis.event_processing.uproot.open")
+def test_should_trigger_background_subtraction_if_bkg_data_provided(mock_uproot, mock_apply_subtraction):
+    """
+    Tests that if a background data dictionary is provided to collect_all_histograms,
+    the function should call apply_subtraction_and_plot to perform the subtraction.
+    """
+    # GIVEN: Fake data for the ROOT file
+    fake_data = {
+        "trigTime": np.array([1000000, 2000000]),
+        "channelID": np.array([[0, 1], [5]], dtype=object),
+        "channelDataLG": np.array([[200, 150], [300]], dtype=object) 
+    }
+    mock_tree = MagicMock()
+    mock_tree.arrays.return_value = fake_data
+    mock_uproot.return_value.__enter__.return_value = MagicMock(__getitem__=MagicMock(return_value=mock_tree))
+    
+    # A fake dictionary has to be returned 
+    mock_apply_subtraction.return_value = {"histograms": {}, "scatter_data": {}}
+    
+    # Create fake background data
+    fake_bkg_data = {"sono_un": "background"}
+
+    # WHEN: We call the function passing to it fake background data
+    collect_all_histograms("fake.root", bkg_data=fake_bkg_data)
+
+    # THEN: We check that apply_subtraction_and_plot was called once with the correct arguments
+    mock_apply_subtraction.assert_called_once()
