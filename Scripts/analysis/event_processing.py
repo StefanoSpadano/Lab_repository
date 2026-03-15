@@ -9,13 +9,13 @@ from tqdm import tqdm
 from typing import Dict, Any, Optional
 from analysis.io_manager import get_project_root
 
-# CONFIGURAZIONE COSTANTI
+# CONSTANTS CONFIGURATION
 PEDESTAL = 50
 THR = 75
 PIX_SIZE = 3.2
 THR_CENTROID = 50
 
-# Mappe Canali
+# Channel Maps
 CH_ID_2_MAP_X = np.array([0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,
                           0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7], dtype=int)
 CH_ID_2_MAP_Y = np.array([6,5,7,4,7,4,6,5,6,5,7,4,7,4,6,5,6,5,7,4,7,4,6,5,6,5,7,4,7,4,6,5,
@@ -40,7 +40,7 @@ def load_calibration_dynamic(run_dir):
                 except: continue
             calib_source = f"File: {os.path.basename(expected_path)} ({count} ch)"
         except Exception as e:
-            print(f"    ⚠️ Errore lettura calibrazione: {e}")
+            print(f"    Error reading calibration: {e}")
             calib_source = "Error (Unity)"
     
     return corr, calib_source
@@ -49,18 +49,18 @@ def elapsed_time(trigTime):
     if len(trigTime) == 0: return 1.0
     return (np.max(trigTime) - np.min(trigTime)) / (10**6)
 
-# --- NUOVE FUNZIONI PER SOTTRAZIONE E PLOT ---
+# Functions for background subtraction and plotting
 
 def plot_subtraction_check(bins, raw_c, bkg_scaled_c, net_c, name, run_path, scale_factor):
-    """Genera il plot di confronto pre/post sottrazione nella cartella Results."""
+    """Generates the pre/post subtraction comparison plot in the Results folder."""
     
-    # 1. Capiamo in che run e in che data ci troviamo partendo dal file .root
-    # Esempio run_path: .../Data_Converted/27_11_2025/Run1.root
+    # Determine the run and date from the .root file
+    # Example run_path: .../Data_Converted/27_11_2025/Run1.root
     run_file = os.path.basename(run_path)                  # "Run1.root"
     run_name = os.path.splitext(run_file)[0]               # "Run1"
     date_str = os.path.basename(os.path.dirname(run_path)) # "27_11_2025"
     
-    # 2. Costruiamo il percorso corretto verso Results
+    # Build the correct path to Results
     root_dir = get_project_root()
     out_dir = os.path.join(root_dir, "Results", date_str, run_name, "bkg_checks")
     os.makedirs(out_dir, exist_ok=True)
@@ -91,52 +91,52 @@ def plot_subtraction_check(bins, raw_c, bkg_scaled_c, net_c, name, run_path, sca
     plt.close()
 
 def apply_subtraction_and_plot(res_run, bkg_data, run_path):
-    """Esegue la sottrazione e chiama la funzione di plot per gli spettri principali."""
+    """Performs subtraction and calls the plot function for the main spectra."""
     t_run = res_run.get("acquisition_time_sec", 1.0)
     t_bkg = bkg_data.get("acquisition_time_sec", 1.0)
     if t_bkg <= 0: t_bkg = 1.0
     
     scale_factor = t_run / t_bkg
-    print(f"    ⚖️  Scaling Factor: {scale_factor:.4f}")
+    print(f"    Scaling Factor: {scale_factor:.4f}")
     
     res_sub = res_run.copy()
     
-    # Istogrammi da sottrarre (aggiungi qui se ne servono altri)
+    # Histograms to subtract (add here if others are needed)
     targets = ["total_charge", "main_clust_charge", "main_pix_charge"]
     
     for key in targets:
         if key in res_run["histograms"] and key in bkg_data["histograms"]:
-            # Estraggo bins e counts della Run
+            # Extract bins and counts for the Run
             bins_run, counts_run = res_run["histograms"][key]
             
-            # Estraggo bins e counts del Bkg
+            # Extract bins and counts for the Bkg
             bins_bkg, counts_bkg = bkg_data["histograms"][key]
             
-            # Se il binning è uguale, procedo
+            # If the binning is the same, proceed
             if len(bins_run) == len(bins_bkg) and np.allclose(bins_run, bins_bkg):
-                # Scalo il background
+                # Scale the background
                 counts_bkg_scaled = counts_bkg * scale_factor
                 
-                # Sottrazione
+                # Subtraction
                 counts_net = counts_run - counts_bkg_scaled
                 
-                # Plot di verifica
+                # Verification plot
                 plot_subtraction_check(bins_run, counts_run, counts_bkg_scaled, counts_net, key, run_path, scale_factor)
                 
-                # Aggiorno il dizionario dei risultati con i dati netti
+                # Update the results dictionary with net data
                 res_sub["histograms"][key] = (bins_run, counts_net)
             else:
-                print(f"    ⚠️  Mismatch binning per {key}. Impossibile sottrarre.")
+                print(f"    Binning mismatch for {key}. Cannot subtract.")
                 
     return res_sub
 
 
 def collect_all_histograms(run_path: str, bkg_data: Optional[Dict] = None) -> Dict[str, Any]:
-    print(f"🔄 Processing: {os.path.basename(run_path)}")
+    print(f"Processing: {os.path.basename(run_path)}")
     
     run_dir = os.path.dirname(run_path)
     corr, calib_info = load_calibration_dynamic(run_dir)
-    print(f"    🔧 Calibrazione: {calib_info}")
+    print(f"    Calibration: {calib_info}")
 
     try:
         with uproot.open(run_path) as f:
@@ -279,7 +279,7 @@ def collect_all_histograms(run_path: str, bkg_data: Optional[Dict] = None) -> Di
     res["raw_data"]["total_charge"] = np.array(total_charge)
 
     if bkg_data:
-        # Usa la nuova funzione interna per sottrarre E generare i grafici
+        # Use the new internal function to subtract AND generate plots
         res_sub = apply_subtraction_and_plot(res, bkg_data, run_path)
         res_sub["scatter_data"] = res["scatter_data"] 
         return res_sub
