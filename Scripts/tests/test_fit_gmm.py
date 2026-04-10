@@ -114,6 +114,21 @@ def test_should_return_empty_arrays_if_rebin_factor_exceeds_bins():
     # THEN: Empty arrays should be returned
     assert len(new_bins) == 0
     assert len(new_counts) == 0
+def test_should_truncate_excess_bins_if_rebin_factor_does_not_divide_bins_evenly():
+    """
+    Tests that if rebin_factor does not divide the number of bins evenly,
+    the excess bins are truncated before rebinning.
+    """
+    # GIVEN: A histogram with 5 bins
+    bins = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])   # 6 edges -> 5 bins
+    counts = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+
+    # WHEN: We rebin by a factor of 2 (which does not divide 5 evenly)
+    new_bins, new_counts = rebin_histogram(bins, counts, rebin_factor=2)
+
+    # THEN: The last bin is truncated and the first four bins are rebinned
+    np.testing.assert_array_equal(new_counts, np.array([30.0, 70.0]))   # (10+20) and (30+40)
+    np.testing.assert_array_equal(new_bins, np.array([0.0, 2.0, 4.0]))   # Edges for the rebinned histogram
 
 
 # ──────────────────────────────────────────────
@@ -138,3 +153,72 @@ def test_should_load_histogram_from_dict_format(tmp_path):
     # THEN: The arrays are correctly loaded
     np.testing.assert_array_equal(bins, np.array([0.0, 1.0, 2.0]))
     np.testing.assert_array_equal(counts, np.array([10.0, 20.0]))
+
+def test_should_return_none_if_json_file_not_found(tmp_path):
+    """
+    Tests that if the expected JSON file is not found, the function returns (None, None).
+    """
+    # GIVEN: No JSON file in the expected directory structure
+
+    # WHEN: We call the function
+    bins, counts = load_histogram_data(str(tmp_path), "total_charge")
+
+    # THEN: The function should return (None, None)
+    assert bins is None
+    assert counts is None
+
+def test_should_handle_json_in_list_format(tmp_path):
+    """
+    Tests that a JSON file in list format [[bins], [counts]]
+    is correctly loaded. This is the secondary supported format.
+    """
+    # GIVEN: A JSON file as a list of two lists [bins_list, counts_list]
+    hist_dir = tmp_path / "histograms"
+    hist_dir.mkdir()
+    fake_data = [[0.0, 1.0, 2.0], [10.0, 20.0]]  # formato [[bins],[counts]]
+    json_path = hist_dir / "total_charge.json"
+    json_path.write_text(json.dumps(fake_data))
+
+    # WHEN: We call the function
+    bins, counts = load_histogram_data(str(tmp_path), "total_charge")
+
+    # THEN: The arrays are correctly loaded
+    np.testing.assert_array_equal(bins, np.array([0.0, 1.0, 2.0]))
+    np.testing.assert_array_equal(counts, np.array([10.0, 20.0]))
+
+def test_should_handle_malformed_json(tmp_path):
+    """
+    Tests that if the JSON file is malformed, the function handles the exception
+    and returns (None, None) without crashing.
+    """
+    # GIVEN: A malformed JSON file
+    hist_dir = tmp_path / "histograms"
+    hist_dir.mkdir()
+    json_path = hist_dir / "total_charge.json"
+    json_path.write_text("This is not a valid JSON")
+
+    # WHEN: We call the function
+    bins, counts = load_histogram_data(str(tmp_path), "total_charge")
+
+    # THEN: The function should return (None, None) and not raise an exception
+    assert bins is None
+    assert counts is None
+
+def test_should_handle_json_with_unexpected_structure(tmp_path):
+    """
+    Tests that if the JSON file does not contain the expected keys or structure,
+    the function returns (None, None) without crashing.
+    """
+    # GIVEN: A JSON file with an unexpected structure
+    hist_dir = tmp_path / "histograms"
+    hist_dir.mkdir()
+    fake_data = {"unexpected_key": [1, 2, 3]}  # Non contiene "bins" e "counts"
+    json_path = hist_dir / "total_charge.json"
+    json_path.write_text(json.dumps(fake_data))
+
+    # WHEN: We call the function
+    bins, counts = load_histogram_data(str(tmp_path), "total_charge")
+
+    # THEN: The function should return (None, None) and not raise an exception
+    assert bins is None
+    assert counts is None
