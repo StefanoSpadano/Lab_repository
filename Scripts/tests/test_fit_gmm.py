@@ -34,6 +34,36 @@ def test_should_calculate_correct_resolution():
     expected = (2.355 * sigma / mu) * 100
     assert abs(result - expected) < 1e-6
 
+def test_should_return_zero_resolution_for_zero_mu():
+    """
+    Tests that if mu is zero, the function returns 0 to avoid division by zero.
+    """
+    # GIVEN: A photopeak with mu = 0
+    mu = 0.0
+    sigma = 200.0
+
+    # WHEN: We call the function
+    result = calculate_resolution(mu, sigma)
+
+    # THEN: Resolution should be 0
+    assert result == 0.0
+
+def test_should_return_zero_resolution_for_zero_sigma():
+    """
+    Tests that if sigma is zero, the function returns 0 since FWHM would be zero.
+    """
+    # GIVEN: A photopeak with sigma = 0
+    mu = 5000.0
+    sigma = 0.0
+
+    # WHEN: We call the function
+    result = calculate_resolution(mu, sigma)
+
+    # THEN: Resolution should be 0 and not NaN or inf
+    assert result == 0.0
+    assert not np.isnan(result)
+    assert not np.isinf(result)
+
 
 # ──────────────────────────────────────────────
 # rebin_histogram
