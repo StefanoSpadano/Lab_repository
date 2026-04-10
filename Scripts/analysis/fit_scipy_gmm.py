@@ -3,14 +3,14 @@ import os
 import json
 import numpy as np
 import matplotlib
-# Backend non-interattivo (Mancava!)
+# Non-interactive backend
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from sklearn.mixture import GaussianMixture
 from analysis.io_manager import get_project_root
 
-# --- CONFIGURAZIONE ---
+# --- CONFIGURATION ---
 TARGET_PAIRS = {
     "Total": "total_charge",
     "Cluster": "main_clust_charge"
@@ -32,8 +32,11 @@ def load_histogram_data(run_path, hist_name):
     return None, None
 
 def rebin_histogram(bins, counts, rebin_factor):
-    if rebin_factor <= 1: return bins, counts
+    if rebin_factor <= 1:
+        return bins, counts
     n_bins_new = len(counts) // rebin_factor
+    if n_bins_new == 0:                        
+        return np.array([]), np.array([])
     limit = n_bins_new * rebin_factor
     counts_trunc = counts[:limit]
     bins_trunc = bins[:limit+1]
@@ -47,7 +50,7 @@ def calculate_resolution(mu, sigma):
     return (fwhm / mu) * 100
 
 def perform_advanced_fit(bins, counts, label, output_dir):
-    print(f"   🔬 GMM Fitting (5 Comp): {label}...")
+    print(f"   GMM Fitting (4 Comp): {label}...")
     
     REBIN_FACTOR = 4  
     bins_reb, counts_reb = rebin_histogram(bins, counts, REBIN_FACTOR)
@@ -60,7 +63,7 @@ def perform_advanced_fit(bins, counts, label, output_dir):
     
     if len(x_clean) < 20: return None
 
-    # Dataset pesato per GMM
+    # Weighted dataset for GMM
     scale_factor = 20000 / np.sum(y_clean) if np.sum(y_clean) > 20000 else 1
     y_scaled = (y_clean * scale_factor).astype(int)
     samples = []
@@ -68,10 +71,10 @@ def perform_advanced_fit(bins, counts, label, output_dir):
         samples.extend([val] * count)
     samples = np.array(samples).reshape(-1, 1)
 
-    # N_tot_effettivo calcolato sulle conte grezze pulite
+    # Effective total events calculated on clean raw counts
     n_tot_events = np.sum(y_clean)
 
-    # 5 Componenti per il Bario (Multipeak + fondo)
+    # 4 Components for Barium (Multipeak + background)
     N_COMPONENTS = 4
     try:
         gmm = GaussianMixture(n_components=N_COMPONENTS, random_state=42, max_iter=200, n_init=5)
@@ -87,7 +90,7 @@ def perform_advanced_fit(bins, counts, label, output_dir):
     sigmas = np.sqrt(covariances)
     peak_heights = weights / sigmas
     
-    # --- PARAMETRI RICERCA PICCO ---
+    # --- PEAK SEARCH PARAMETERS ---
     MIN_CH_PICCO = 3000   
     MAX_CH_PICCO = 7000  
     
@@ -109,7 +112,7 @@ def perform_advanced_fit(bins, counts, label, output_dir):
     photopeak_res = calculate_resolution(mu_peak, sigma_peak)
 
     # =========================================================================
-    # --- CALCOLO ERRORI STATISTICI (NUOVA SEZIONE) ---
+    # --- STATISTICAL ERROR CALCULATION ---
     # =========================================================================
     n_eff_peak = weight_peak * n_tot_events
     
@@ -120,7 +123,7 @@ def perform_advanced_fit(bins, counts, label, output_dir):
         fwhm_peak = 2.355 * sigma_peak
         delta_fwhm = 2.355 * delta_sigma
         
-        # Propagazione errore sulla risoluzione R = FWHM / mu
+        # Error propagation on resolution R = FWHM / mu
         if mu_peak > 0:
             delta_res = photopeak_res * np.sqrt((delta_fwhm / fwhm_peak)**2 + (delta_mu / mu_peak)**2)
         else:
@@ -139,7 +142,7 @@ def perform_advanced_fit(bins, counts, label, output_dir):
     x_plot = np.linspace(bins_reb[0], bins_reb[-1], 1000)
     norm_factor = np.sum(counts_reb * (bins_reb[1] - bins_reb[0]))
     
-    # Calcolo residui
+    # Calculate residuals
     model_y = np.zeros_like(x_clean)
     for i in range(len(means)):
         mu, sigma, w = means[i], np.sqrt(covariances[i]), weights[i]
@@ -147,7 +150,7 @@ def perform_advanced_fit(bins, counts, label, output_dir):
         model_y += pdf * norm_factor
     residuals = y_clean - model_y
 
-    # Chi Quadro ROI
+    # Chi-Square ROI
     roi_min = mu_peak - 2.5 * sigma_peak
     roi_max = mu_peak + 2.5 * sigma_peak
     mask_roi = (x_clean >= roi_min) & (x_clean <= roi_max)
@@ -162,9 +165,9 @@ def perform_advanced_fit(bins, counts, label, output_dir):
         ndf_local = len(y_roi) - 3 
         chi_reduced = chi_sq_local / ndf_local if ndf_local > 0 else 0
 
-    # Pannello SUPERIORE
+    # UPPER Panel
     ax0 = plt.subplot(gs[0])
-    ax0.step(centers, counts_reb, where='mid', color='black', alpha=0.4, label=f'Dati (Rebin x{REBIN_FACTOR})')
+    ax0.step(centers, counts_reb, where='mid', color='black', alpha=0.4, label=f'Data (Rebin x{REBIN_FACTOR})')
     
     total_pdf_plot = np.zeros_like(x_plot)
     colors = ['green', 'blue', 'orange', 'purple', 'cyan']
@@ -176,27 +179,39 @@ def perform_advanced_fit(bins, counts, label, output_dir):
         total_pdf_plot += pdf_scaled
         
         col = colors[i % len(colors)]
-        lbl_prefix = "★ PICCO" if i == photopeak_idx else f"Comp {i+1}"
+        lbl_prefix = "★ PEAK" if i == photopeak_idx else f"Comp {i+1}"
         ax0.plot(x_plot, pdf_scaled, '--', color=col, linewidth=1.5, label=f"{lbl_prefix} ({mu:.0f} ADU)")
 
-    ax0.plot(x_plot, total_pdf_plot, 'r-', linewidth=2, label='Fit Totale (GMM)')
-    ax0.set_title(f"GMM Fit (4 Comp): {label} (R={photopeak_res:.2f}%)", fontweight='bold')
-    ax0.legend()
+    ax0.plot(x_plot, total_pdf_plot, 'r-', linewidth=2, label='Total Fit (GMM)')
+    ax0.set_title(f"GMM Fit (4 Comp): {label}", fontweight='bold', fontsize=14)
+    ax0.set_ylabel("Counts", fontsize=12) # ADDED Y-AXIS LABEL
+    ax0.legend(loc='upper right')
     ax0.grid(alpha=0.3)
     if "Total" in label: ax0.set_xlim(0, 8000)
 
-    # Pannello INFERIORE
+    # ADDED TEXT BOX WITH ERRORS
+    fit_info_text = (
+        f"Photopeak Results:\n"
+        f"$\\mu = {mu_peak:.1f} \\pm {delta_mu:.1f}$ ADU\n"
+        f"FWHM $= {fwhm_peak:.1f} \\pm {delta_fwhm:.1f}$ ADU\n"
+        f"Res. $= {photopeak_res:.2f} \\pm {delta_res:.2f}\\%$ "
+    )
+    props = dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray')
+    ax0.text(0.02, 0.95, fit_info_text, transform=ax0.transAxes, fontsize=11,
+             verticalalignment='top', bbox=props)
+
+    # LOWER Panel
     ax1 = plt.subplot(gs[1], sharex=ax0)
     ax1.scatter(x_clean, residuals, s=15, color='purple', alpha=0.5)
-    ax1.scatter(x_clean[mask_roi], residuals[mask_roi], s=25, color='red', label='ROI Picco')
+    ax1.scatter(x_clean[mask_roi], residuals[mask_roi], s=25, color='red', label='Peak ROI')
     ax1.axhline(0, color='black', linestyle='--')
     
-    # Fix sintassi LaTeX
     stats_text = r"Local $\chi^2$/ndf = " + f"{chi_reduced:.2f}"
-    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-    ax1.text(0.02, 0.08, stats_text, transform=ax1.transAxes, bbox=props)
+    props2 = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+    ax1.text(0.02, 0.08, stats_text, transform=ax1.transAxes, bbox=props2)
     
-    ax1.set_ylabel("Residui")
+    ax1.set_xlabel("Energy [ADC Channels]", fontsize=12) # ADDED X-AXIS LABEL WITH UNITS
+    ax1.set_ylabel("Residuals", fontsize=12)
     ax1.legend(loc='upper right', fontsize='small')
     ax1.grid(alpha=0.3)
 
@@ -225,25 +240,25 @@ def main():
     runs = [d for d in os.listdir(base_res_dir) if d.startswith("Run") and os.path.isdir(os.path.join(base_res_dir, d))]
     runs.sort(key=lambda x: int(''.join(filter(str.isdigit, x))) if any(c.isdigit() for c in x) else x)
 
-    # JSON DEDICATO ALLA GMM
+    # JSON DEDICATED TO GMM
     json_path = os.path.join(base_res_dir, "thesis_summary_data_gmm.json")
     
-    # 1. CARICAMENTO DATI ESISTENTI (INCREMENTAL UPDATE)
+    # 1. LOAD EXISTING DATA (INCREMENTAL UPDATE)
     if os.path.exists(json_path):
         try:
             with open(json_path, "r") as f:
                 summary_data_gmm = json.load(f)
-            print(f"📂 Caricato database GMM esistente ({len(summary_data_gmm)} runs).")
+            print(f" Loaded existing GMM database ({len(summary_data_gmm)} runs).")
         except json.JSONDecodeError:
             summary_data_gmm = {}
     else:
         summary_data_gmm = {}
 
     for run in runs:
-        print(f"\n--- Analisi GMM {run} ---")
+        print(f"\n--- GMM Analysis {run} ---")
         run_path = os.path.join(base_res_dir, run)
         
-        # Recupera dati o crea nuovo
+        # Retrieve data or create new
         run_results = summary_data_gmm.get(run, {})
         
         updated_any = False
@@ -257,13 +272,13 @@ def main():
 
         if updated_any:
             summary_data_gmm[run] = run_results
-            print(f"   -> Dati GMM aggiornati per {run}")
+            print(f"   -> GMM Data updated for {run}")
 
-    # 2. SALVATAGGIO
+    # 2. SAVING
     with open(json_path, "w") as f:
         json.dump(summary_data_gmm, f, indent=4)
         
-    print(f"\n✅ Dati riassuntivi GMM salvati in: {json_path}")
+    print(f"\n GMM summary data saved in: {json_path}")
 
 if __name__ == "__main__":
     main()
