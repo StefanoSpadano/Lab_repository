@@ -85,6 +85,36 @@ def test_should_sum_counts_and_reduce_bins_when_rebinning():
     np.testing.assert_array_equal(new_counts, np.array([30.0, 70.0]))
     np.testing.assert_array_equal(new_bins, np.array([0.0, 2.0, 4.0]))
 
+def test_should_check_data_are_not_changed_if_rebin_factor_is_one():
+    """
+    Tests that if rebin_factor=1, the original bins and counts are returned unchanged.
+    """
+    # GIVEN: A simple histogram
+    bins = np.array([0.0, 1.0, 2.0, 3.0])   # 4 edges -> 3 bins
+    counts = np.array([10.0, 20.0, 30.0])
+
+    # WHEN: We rebin by a factor of 1 (no rebinning)
+    new_bins, new_counts = rebin_histogram(bins, counts, rebin_factor=1)
+
+    # THEN: The original bins and counts are returned unchanged
+    np.testing.assert_array_equal(new_bins, bins)
+    np.testing.assert_array_equal(new_counts, counts)
+
+def test_should_return_empty_arrays_if_rebin_factor_exceeds_bins():
+    """
+    Tests that if rebin_factor is larger than the number of bins, empty arrays are returned.
+    """
+    # GIVEN: A histogram with 3 bins
+    bins = np.array([0.0, 1.0, 2.0, 3.0])   # 4 edges -> 3 bins
+    counts = np.array([10.0, 20.0, 30.0])
+
+    # WHEN: We rebin by a factor of 4 (more than number of bins)
+    new_bins, new_counts = rebin_histogram(bins, counts, rebin_factor=4)
+
+    # THEN: Empty arrays should be returned
+    assert len(new_bins) == 0
+    assert len(new_counts) == 0
+
 
 # ──────────────────────────────────────────────
 # load_histogram_data
