@@ -38,6 +38,54 @@ def test_should_return_amp_plus_c_at_peak():
     # THEN: Result should be amp + c
     assert abs(result - (amp + c)) < 1e-10
 
+def test_should_return_an_array_of_the_same_length_when_an_array_is_passed():
+    """
+    Tests that single_gaussian can handle numpy arrays and returns an array
+    of the same length with the correct values.
+    """
+    # GIVEN: An array of x values
+    amp, mu, sigma, c = 100.0, 0.0, 2.0, 10.0
+    x = np.array([-2.0, 0.0, 2.0])
+
+    # WHEN: We call single_gaussian with an array
+    result = single_gaussian(x, amp, mu, sigma, c)
+
+    # THEN: Result should be an array of the same length with correct values
+    expected = amp * np.exp(-0.5 * (x / sigma)**2) + c
+    assert isinstance(result, np.ndarray)
+    assert result.shape == x.shape
+    assert np.allclose(result, expected)
+
+def test_should_handle_small_sigma_values():
+    """
+    Tests that single_gaussian can handle very small sigma values without
+    resulting in overflow or underflow errors.
+    """
+    # GIVEN: A very small sigma
+    amp, mu, sigma, c = 100.0, 5.0, 1e-6, 10.0
+    x = np.array([5.0])  # Evaluate at the peak
+
+    # WHEN: We call single_gaussian
+    result = single_gaussian(x, amp, mu, sigma, c)
+
+    # THEN: Result should be finite and equal to amp + c
+    assert np.isfinite(result).all()
+    assert abs(result - (amp + c)) < 1e-10
+
+def test_should_return_c_when_amp_is_zero():
+    """
+    Tests that if amp is zero, single_gaussian returns the background level c.
+    """
+    # GIVEN: amp = 0
+    amp, mu, sigma, c = 0.0, 5.0, 2.0, 10.0
+    x = np.array([5.0])  # Evaluate at the peak
+
+    # WHEN: We call single_gaussian
+    result = single_gaussian(x, amp, mu, sigma, c)
+
+    # THEN: Result should be equal to c
+    assert abs(result - c) < 1e-10
+
 
 # ──────────────────────────────────────────────
 # double_gaussian
