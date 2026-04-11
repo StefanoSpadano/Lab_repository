@@ -32,6 +32,53 @@ def test_should_return_correct_gaussian_value_at_peak():
     # THEN: Result should be amp + c (exponential = 1 at peak)
     assert abs(result - (amp + c)) < 1e-10
 
+def test_should_handle_small_sigma_without_error():
+    """
+    Tests that the gaussian function can handle very small sigma values
+    without resulting in overflow or underflow errors.
+    """
+    # GIVEN: A very small sigma
+    amp, mu, sigma, c = 100.0, 5.0, 1e-6, 10.0
+    x = np.array([5.0])  # Evaluate at the peak
+
+    # WHEN: We call the gaussian function
+    result = gaussian(x, amp, mu, sigma, c)
+
+    # THEN: Result should still be finite and equal to amp + c
+    assert np.isfinite(result).all()
+    assert abs(result - (amp + c)) < 1e-10
+
+def test_should_handle_negative_c_value():
+    """
+    Tests that the gaussian function can handle a negative background (c)
+    without producing incorrect results.
+    """
+    # GIVEN: A negative c value
+    amp, mu, sigma, c = 100.0, 5.0, 2.0, -20.0
+    x = np.array([5.0])  # Evaluate at the peak
+
+    # WHEN: We call the gaussian function
+    result = gaussian(x, amp, mu, sigma, c)
+
+    # THEN: Result should be amp + c (which is 80 in this case)
+    assert abs(result - (amp + c)) < 1e-10
+
+def test_should_handle_array_of_x_values():
+    """
+    Tests that the gaussian function can handle an array of x values and
+    returns an array of corresponding gaussian values.
+    """
+    # GIVEN: An array of x values and known parameters
+    amp, mu, sigma, c = 100.0, 5.0, 2.0, 10.0
+    x = np.array([3.0, 5.0, 7.0])  # Evaluate at different points
+
+    # WHEN: We call the gaussian function
+    result = gaussian(x, amp, mu, sigma, c)
+
+    # THEN: Result should be an array of gaussian values
+    expected = amp * np.exp(-0.5 * ((x - mu) / sigma)**2) + c
+    np.testing.assert_array_almost_equal(result, expected)
+
 
 # ──────────────────────────────────────────────
 # load_scatter_data
@@ -55,6 +102,57 @@ def test_should_load_scatter_data_from_primary_json_format(tmp_path):
     # THEN: Arrays are correctly loaded
     np.testing.assert_array_equal(x, np.array([1.0, 2.0, 3.0]))
     np.testing.assert_array_equal(y, np.array([4.0, 5.0, 6.0]))
+
+def test_should_handle_missing_file_in_both_paths(tmp_path):
+    """
+    Tests that if neither the primary nor the alternative JSON file exists,
+    the function returns (None, None) without crashing.
+    """
+    # GIVEN: No JSON files in either location
+
+    # WHEN: We call the function
+    x, y = load_scatter_data(str(tmp_path))
+
+    # THEN: Should return (None, None)
+    assert x is None
+    assert y is None
+
+def test_should_handle_secondary_json_format_with_scatter_data(tmp_path):
+    """
+    Tests that scatter data is correctly loaded when the JSON contains
+    a 'scatter_data' key with 'xyclus_x' and 'xyclus_y' inside it.
+    """
+    # GIVEN: A JSON file in the secondary format
+    hist_dir = tmp_path / "histograms"
+    hist_dir.mkdir()
+    fake_data = {"scatter_data": {"xyclus_x": [1.0, 2.0, 3.0], "xyclus_y": [4.0, 5.0, 6.0]}}
+    json_path = hist_dir / "scatter_data.json"
+    json_path.write_text(json.dumps(fake_data))
+
+    # WHEN: We call the function
+    x, y = load_scatter_data(str(tmp_path))
+
+    # THEN: Arrays are correctly loaded
+    np.testing.assert_array_equal(x, np.array([1.0, 2.0, 3.0]))
+    np.testing.assert_array_equal(y, np.array([4.0, 5.0, 6.0]))
+
+def test_should_handle_malformed_json(tmp_path):
+    """
+    Tests that if the JSON file is malformed, the function handles the exception
+    and returns (None, None) without crashing.
+    """
+    # GIVEN: A malformed JSON file
+    hist_dir = tmp_path / "histograms"
+    hist_dir.mkdir()
+    json_path = hist_dir / "scatter_data.json"
+    json_path.write_text("This is not a valid JSON")
+
+    # WHEN: We call the function
+    x, y = load_scatter_data(str(tmp_path))
+
+    # THEN: Should return (None, None) and not raise an exception
+    assert x is None
+    assert y is None
 
 
 # ──────────────────────────────────────────────
@@ -80,7 +178,7 @@ def test_should_return_reasonable_fwhm_for_clean_gaussian_data():
     # THEN: FWHM should be close to 2.355 * sigma = 7.065 mm
     expected_fwhm = 2.355 * sigma
     assert fwhm is not None
-    assert abs(fwhm - expected_fwhm) < 0.5   # tolleranza 0.5 mm
+    assert abs(fwhm - expected_fwhm) < 0.5   # tolerance 0.5 mm
 
 
 def test_should_return_none_if_not_enough_points():
