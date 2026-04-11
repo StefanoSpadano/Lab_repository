@@ -126,6 +126,61 @@ def test_should_return_correct_value_at_midpoint_between_peaks():
     expected = 2 * amp * np.exp(-0.5 * (4.0 / sigma)**2)
     assert abs(result - expected) < 1e-10
 
+def test_should_return_a_single_gaussian_when_amp1_is_zero():
+    """
+    Tests that if amp1 is zero, double_gaussian reduces to a single
+    gaussian defined by amp2, mu2, sigma2, plus background c.
+    """
+    # GIVEN: amp1 = 0
+    amp1 = 0.0
+    mu1, sigma1 = -5.0, 1.0
+    amp2, mu2, sigma2 = 100.0, 5.0, 1.0
+    c = 10.0
+
+    # WHEN: We evaluate at x = mu2 (peak of second gaussian)
+    result = double_gaussian(mu2, amp1, mu1, sigma1, amp2, mu2, sigma2, c)
+
+    # THEN: Result should be approximately amp2 + c
+    assert abs(result - (amp2 + c)) < 1e-6
+
+def test_should_return_the_sum_of_amp1_and_amp2_when_mu1_equals_mu2():
+    """
+    Tests that if mu1 equals mu2, double_gaussian returns the sum of
+    amp1 and amp2 plus background c at that point.
+    """
+    # GIVEN: mu1 = mu2
+    mu = 0.0
+    amp1, sigma1 = 100.0, 1.0
+    amp2, sigma2 = 80.0, 1.0
+    c = 5.0
+
+    # WHEN: We evaluate at x = mu (where both peaks coincide)
+    result = double_gaussian(mu, amp1, mu, sigma1, amp2, mu, sigma2, c)
+
+    # THEN: Result should be amp1 + amp2 + c
+    assert abs(result - (amp1 + amp2 + c)) < 1e-6
+
+def test_should_return_the_correct_length_array_when_given_an_array_of_x_values():
+    """
+    Tests that double_gaussian can handle an array of x values and returns
+    an array of the same length with the correct double gaussian values.
+    """
+    # GIVEN: An array of x values and known parameters
+    amp1, mu1, sigma1 = 100.0, -3.0, 1.0
+    amp2, mu2, sigma2 = 80.0, 3.0, 1.0
+    c = 10.0
+    x = np.array([-5.0, -3.0, 0.0, 3.0, 5.0])
+
+    # WHEN: We call double_gaussian with an array
+    result = double_gaussian(x, amp1, mu1, sigma1, amp2, mu2, sigma2, c)
+
+    # THEN: Result should be an array of the same length with correct values
+    expected = (amp1 * np.exp(-0.5 * ((x - mu1) / sigma1)**2) +
+                amp2 * np.exp(-0.5 * ((x - mu2) / sigma2)**2) + c)
+    assert isinstance(result, np.ndarray)
+    assert result.shape == x.shape
+    assert np.allclose(result, expected)
+
 
 # ──────────────────────────────────────────────
 # fit_double_profile
