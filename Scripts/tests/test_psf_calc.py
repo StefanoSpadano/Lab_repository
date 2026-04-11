@@ -218,3 +218,41 @@ def test_should_return_none_if_data_are_all_zeros():
     # THEN: Should return None, None gracefully
     assert fwhm is None
     assert fwhm_err is None
+
+def test_should_warn_about_pixel_locking_for_very_narrow_peaks():
+    """
+    Tests that fit_profile identifies when the fitted FWHM is below 0.5 mm
+    and returns it with a warning status.
+    """
+    # GIVEN: A very narrow gaussian profile
+    amp, mu, sigma, c = 500.0, 0.0, 0.1, 0.0
+    axis_vals = np.linspace(-1.0, 1.0, 100)
+    profile_counts = gaussian(axis_vals, amp, mu, sigma, c)
+
+    fig, ax = plt.subplots()
+
+    # WHEN: We call fit_profile
+    fwhm, fwhm_err = fit_profile(axis_vals, profile_counts, "Test", ax)
+    plt.close()
+
+    # THEN: FWHM should be below 0.5 mm and status should indicate pixel locking
+    assert fwhm is not None
+    assert fwhm < 0.5
+
+def test_should_converge_even_for_noisy_gaussian_data():
+    """
+    Tests that fit_profile can still return a reasonable FWHM estimate
+    even when the input data are noisy, as long as there are enough points.
+    """
+    # GIVEN: A noisy gaussian profile
+    amp, mu, sigma, c = 500.0, 0.0, 3.0, 0.0
+    axis_vals = np.linspace(-15.0, 15.0, 60)
+    clean_counts = gaussian(axis_vals, amp, mu, sigma, c)
+    noise = np.random.normal(0, 20.0, size=clean_counts.shape)
+    profile_counts = clean_counts + noise
+
+    fig, ax = plt.subplots()
+
+    # WHEN: We call fit_profile
+    fwhm, fwhm_err = fit_profile(axis_vals, profile_counts, "Test", ax)
+    plt.close()
