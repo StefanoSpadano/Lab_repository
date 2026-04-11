@@ -251,3 +251,43 @@ def test_should_return_none_if_not_enough_points():
     assert dist_mm is None
     assert mu1 is None
     assert mu2 is None
+
+def test_should_fall_back_when_is_single_peak_condition_is_met():
+    """
+    Tests that fit_double_profile correctly identifies when the two peaks
+    are too close or one is too small, and falls back to a single gaussian.
+    """
+    # GIVEN: Two peaks very close together
+    axis_vals = np.linspace(-5.0, 5.0, 50)
+    profile_counts = (100.0 * np.exp(-0.5 * ((axis_vals + 0.5) / 1.0)**2) +
+                      20.0 * np.exp(-0.5 * ((axis_vals - 0.5) / 1.0)**2))
+
+    fig, ax = plt.subplots()
+
+    # WHEN: We call fit_double_profile
+    dist_mm, mu1, mu2 = fit_double_profile(axis_vals, profile_counts, "Test", ax)
+    plt.close()
+
+    # THEN: Should fall back to single fit, distance = 0.0, mu2 = None
+    assert dist_mm == 0.0
+    assert mu2 is None
+
+def test_should_handle_data_initialized_as_zeros():
+    """
+    Tests that fit_double_profile returns (None, None, None) when the input
+    data are all zeros, which would make the fit fail.
+    """
+    # GIVEN: A profile with all zero counts
+    axis_vals = np.linspace(-5.0, 5.0, 50)
+    profile_counts = np.zeros_like(axis_vals)
+
+    fig, ax = plt.subplots()
+
+    # WHEN: We call fit_double_profile
+    dist_mm, mu1, mu2 = fit_double_profile(axis_vals, profile_counts, "Test", ax)
+    plt.close()
+
+    # THEN: Should return (None, None, None) gracefully
+    assert dist_mm is None
+    assert mu1 is None
+    assert mu2 is None
