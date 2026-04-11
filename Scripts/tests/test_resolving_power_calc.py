@@ -291,3 +291,24 @@ def test_should_handle_data_initialized_as_zeros():
     assert dist_mm is None
     assert mu1 is None
     assert mu2 is None
+
+def test_should_handle_limit_case_when_peaks_are_distant_exactly_2mm():
+    """
+    Tests that fit_double_profile correctly identifies two peaks that are
+    exactly 2 mm apart, which is the threshold for considering them as
+    separate sources.
+    """
+    # GIVEN: Two peaks exactly 2 mm apart
+    axis_vals = np.linspace(-10.0, 10.0, 100)
+    profile_counts = (150.0 * np.exp(-0.5 * ((axis_vals + 1.25) / 1.0)**2) +
+                  150.0 * np.exp(-0.5 * ((axis_vals - 1.25) / 1.0)**2))
+
+    fig, ax = plt.subplots()
+
+    # WHEN: We call fit_double_profile
+    dist_mm, mu1, mu2 = fit_double_profile(axis_vals, profile_counts, "Test", ax)
+    plt.close()
+
+    # THEN: Should identify two peaks with distance close to 2 mm
+    assert dist_mm is not None
+    assert abs(dist_mm - 2.5) < 0.5
