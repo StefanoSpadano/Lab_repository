@@ -199,3 +199,22 @@ def test_should_return_none_if_not_enough_points():
     # THEN: Should return None, None gracefully
     assert fwhm is None
     assert fwhm_err is None
+
+def test_should_return_none_if_data_are_all_zeros():
+    """
+    Tests that fit_profile returns (None, None) when the input data
+    are all zeros, which would make the fit fail.
+    """
+    # GIVEN: A profile with all zero counts
+    axis_vals = np.linspace(-5.0, 5.0, 50)
+    profile_counts = np.zeros_like(axis_vals)
+
+    fig, ax = plt.subplots()
+
+    # WHEN: We call fit_profile
+    fwhm, fwhm_err = fit_profile(axis_vals, profile_counts, "Test", ax)
+    plt.close()
+
+    # THEN: Should return None, None gracefully
+    assert fwhm is None
+    assert fwhm_err is None
