@@ -15,16 +15,36 @@ This project contains:
 ```
 Lab_repository/
 │
-├── Scripts/ # Python script to convert files from .txt to .root and Python file to run the pipeline
-│ └──analysis # Python scripts for analysis
-├── Data/ # save here you data that need to be converted in .root
-│ └── Data_converted/ # placeholder folder for converted data 
-│ └── .gitkeep
+├── Scripts/                         # Main scripts
+│   ├── convert_to_root.py           # Converts .txt files to .root format
+│   ├── run_pipeline.py              # Runs the full analysis pipeline
+│   └── analysis/                    # Analysis modules package
+│       ├── event_processing.py      # Event loop, histograms, background subtraction
+│       ├── fit_scipy_gmm.py         # Gaussian Mixture Model spectral fit
+│       ├── fit_scipy_step.py        # Crystal Ball + step function fit
+│       ├── io_manager.py            # Path resolution and JSON/NumPy I/O
+│       ├── psf_calc.py              # Point Spread Function (PSF) calculation
+│       ├── resolving_power_calc.py  # Multi-source / phantom imaging analysis
+│       └── save_results.py          # Saves histograms, maps and plots to disk
 │
-├── Results/ # placeholder for analysis outputs (ignored except .gitkeep)
-│ └── .gitkeep
+├── Scripts/tests/                   # pytest test suite
+│   ├── test_convert_to_root.py
+│   ├── test_event_processing.py
+│   ├── test_fit_gmm.py
+│   ├── test_fit_scipy_step.py
+│   ├── test_io_manager.py
+│   ├── test_psf_calc.py
+│   ├── test_resolving_power_calc.py
+│   └── test_save_results.py
 │
-├── requirements.txt # Python dependencies used by all scripts
+├── Data/                            # Save here the .txt files to convert
+│   └── Data_converted/              # Placeholder folder for converted .root files
+│       └── .gitkeep
+│
+├── Results/                         # Placeholder for analysis outputs (ignored except .gitkeep)
+│   └── .gitkeep
+│
+├── requirements.txt                 # Python dependencies used by all scripts
 └── README.md
 ```
 
@@ -70,27 +90,39 @@ So we opted to convert them to .root allowing us to store data in a compressed, 
 
 As a result, .root seemed to be the natural choice for analysis workflows in radiation detection and gamma-camera experiments.
 
-Once you are in the Scripts folder and you saved your .txt files in the Data folder you can start the conversion by running:
-```bash
-python convert_to_root.py
-```
-During our acquisitions in the laboratory, we thought it was best for us to save the files we gather using the FERS, according to their date of acquisition; so a Run acquired today (01/12/2025) should be saved in a folder called 2025-12-01 and this folder should be placed inside the Data folder. 
+During our acquisitions in the laboratory, we thought it was best for us to save the files we gather using the FERS, according to their date of acquisition; so a Run acquired today (01/12/2025) should be saved in a folder called 2025-12-01 and this folder should be placed inside the Data folder.
 
-The script in this way is going to select the latest folder and create a folder, inside the folder Data_converted, with a corresponding name (date) containing the same Runs but converted in .root. 
+**Convert the latest date folder automatically** (picks the most recently modified folder in `Data/`):
+```bash
+python Scripts/convert_to_root.py
+```
+
+**Convert a specific date folder:**
+```bash
+python Scripts/convert_to_root.py --date 2025-12-01
+```
+
+**Convert a single file:**
+```bash
+python Scripts/convert_to_root.py --input-file Data/2025-12-01/Run0_list.txt
+```
+
+The `--gain` option (`LG`, `HG`, or `BOTH`) can be added to any of the above calls; if omitted, the gain is inferred from the filename.
+
+The script selects the target folder and creates a corresponding folder inside `Data/Data_converted/` containing the same Runs converted to `.root`.
 
 ### 2. Run the analysis pipeline
-Once the conversion to .root is complete, the analysis can be performed running the main pipeline script from the Scripts folder:
+Once the conversion to .root is complete, the analysis can be performed by running the pipeline script from the repository root, passing the date folder as an argument:
 ```bash
-python run_pipeline.py
+python Scripts/run_pipeline.py 2025-12-01
 ```
 
 This pipeline automatically:
-- identifies the latest folder inside Data/Data_converted;
-- load each run.root files;
-- performs event processing and histogram extraction;
-- generate both a global pixel map and a cluster pixel map;
-- fits 1D and 2D distributions;
-- saves all results (plots, JSON summaries, and derived quantities) inside a new date-stamped folder under Results/ .
+- identifies the converted data folder `Data/Data_converted/2025-12-01/`;
+- optionally loads a background reference from a `Background/` sub-folder (if present);
+- loads each `RunN.root` file;
+- performs event processing, histogram extraction and pixel map generation;
+- saves all results (plots, JSON histograms, and scatter data) inside a new date-stamped folder under `Results/`.
 
 So, once this has worked correctly an example output could be something like this:
 ```
@@ -98,9 +130,48 @@ Results/
 └── 2025-12-01/
     ├── Run0/
     │   ├── histograms/
-    │   ├── fits/
-    │   ├── spectrum/
+    │   ├── maps/
     │   └── plots/
     ├── Run1/
     └── ...
+```
+
+### 3. Run the spectral fits manually
+The fitting steps are kept separate so you can choose the model that best suits each dataset. Run these from the repository root after the pipeline has completed:
+
+```bash
+# Crystal Ball + step function fit
+python -m analysis.fit_scipy_step 2025-12-01
+
+# Gaussian Mixture Model fit (4 components)
+python -m analysis.fit_scipy_gmm 2025-12-01
+```
+
+Each script reads the histogram JSON files produced by the pipeline and writes fit plots and a summary JSON (`thesis_summary_data*.json`) into the corresponding `Results/` sub-folders.
+
+### 4. Spatial analysis (PSF and resolving power)
+Point Spread Function and multi-source resolving power analyses can be run on individual runs:
+
+```bash
+# PSF analysis (single point source)
+python -m analysis.psf_calc 2025-12-01 Run0
+
+# Multi-source / phantom imaging analysis
+python -m analysis.resolving_power_calc 2025-12-01 Run0
+```
+
+---
+
+## Running the tests
+
+The test suite uses [pytest](https://docs.pytest.org/) and covers all analysis modules. Run it from the `Scripts/` directory:
+
+```bash
+cd Scripts
+python -m pytest tests/ -v
+```
+
+To run only a specific test file:
+```bash
+python -m pytest tests/test_event_processing.py -v
 ```
